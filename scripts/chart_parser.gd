@@ -4,6 +4,7 @@ extends RefCounted
 const DIFFICULTIES := ["Easy", "Medium", "Hard", "Expert"]
 
 var resolution: int = 480
+var audio_offset_sec: float = 0.0  # from [Song] Offset field (seconds)
 var bpm_events: Array = []   # [{tick, bpm}]
 var notes: Array = []        # [{time_ms, lane, duration_ms}]
 var lyrics: Array = []       # [{time_ms, text}]
@@ -100,6 +101,9 @@ func _parse_song(lines: Array) -> void:
 			var val := parts[1].strip_edges()
 			if key == "Resolution":
 				resolution = int(val)
+			elif key == "Offset":
+				audio_offset_sec = float(val)
+				print("ChartParser: Offset = %.3f sec" % audio_offset_sec)
 
 func _parse_sync_track(lines: Array) -> void:
 	for line in lines:

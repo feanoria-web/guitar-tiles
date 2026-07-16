@@ -43,9 +43,20 @@ var current_phrase_idx: int = 0
 var lane_count: int = 5
 var lane_colors: Array[Color] = []
 var _start_ticks: int = 0
-var _playback_ready: bool = false  # true once playback position > 0
 var _first_hit_logged: bool = false
 var _play_call_time_ms: int = 0
+var _hit_log_count: int = 0
+var _chart_offset_ms: float = 0.0
+
+# Decode pipeline (AudioEffectCapture → single AudioStreamWAV)
+var _decode_bus_idx: int = -1
+var _decode_capture: AudioEffectCapture = null
+var _decode_players: Array[AudioStreamPlayer] = []
+var _decode_pcm: PackedVector2Array = PackedVector2Array()
+var _decode_start_ms: int = 0
+var _decode_longest_sec: float = 0.0
+var _cache_path: String = ""
+var _countdown: float = -1.0
 
 # Sustain hold tracking
 var lane_pressed: Array = []   # bool per lane
@@ -261,6 +272,8 @@ func _load_song() -> void:
 	var parsed_lyrics: Array = []
 	var parsed_resolution: int = 480
 
+	var chart_offset_sec := 0.0
+
 	if source.ends_with(".sng"):
 		sng_loader = SngLoaderScript.new()
 		if not sng_loader.load_sng(source):
@@ -275,6 +288,7 @@ func _load_song() -> void:
 				parsed_notes = parser.notes
 				parsed_lyrics = parser.lyric_phrases
 				parsed_resolution = parser.resolution
+				chart_offset_sec = parser.audio_offset_sec
 				print("Game: parsed .chart from .sng")
 		if not parse_ok and sng_loader.has_midi():
 			var midi_parser = MidiParserScript.new()
@@ -296,6 +310,7 @@ func _load_song() -> void:
 		parsed_notes = parser.notes
 		parsed_lyrics = parser.lyric_phrases
 		parsed_resolution = parser.resolution
+		chart_offset_sec = parser.audio_offset_sec
 
 	elif source.ends_with(".mid"):
 		var midi_parser = MidiParserScript.new()
@@ -308,6 +323,10 @@ func _load_song() -> void:
 
 	else:
 		push_error("Game: unknown file type: %s" % source); return
+
+	_chart_offset_ms = chart_offset_sec * 1000.0
+	if absf(_chart_offset_ms) > 0.1:
+		print("Game: chart offset = %.1f ms" % _chart_offset_ms)
 
 	notes = parsed_notes
 	lyric_phrases = parsed_lyrics
@@ -328,14 +347,14 @@ func _load_song() -> void:
 	print("Game: [%s][%s] %d notes, %d phrases" % [song_mode, difficulty, notes.size(), lyric_phrases.size()])
 
 	is_loading = true
-	loading_status = "Loading audio..."
+	loading_status = "Ses hazirlaniyor..."
 	if sng_loader:
 		var tmp_dir := "user://sng_temp"
 		_clear_dir(tmp_dir)
 		sng_loader.extract_to_dir(tmp_dir)
-		_load_stems_from_dir(tmp_dir)
+		_prepare_audio(tmp_dir)
 	else:
-		_load_stems_from_dir(source.get_base_dir())
+		_prepare_audio(source.get_base_dir())
 
 func _merge_piano_lanes() -> void:
 	var time_set := {}
@@ -353,12 +372,12 @@ func _merge_piano_lanes() -> void:
 		merged.append(n)
 	notes = merged
 
-# --- Threaded audio ---
+# --- Audio decode pipeline ---
 
-func _load_stems_from_dir(dir_path: String) -> void:
+func _prepare_audio(dir_path: String) -> void:
 	print("Audio: scanning stems in %s" % dir_path)
 
-	# List all audio files in directory
+	# List all audio files
 	var all_audio: Array[String] = []
 	var dir := DirAccess.open(dir_path)
 	if dir:
@@ -373,70 +392,226 @@ func _load_stems_from_dir(dir_path: String) -> void:
 		dir.list_dir_end()
 	print("Audio: found files: %s" % str(all_audio))
 
-	# Categorize files: song.*, preview.*, stems
+	# Categorize: song.*, preview.*, stems
 	var song_files: Array[String] = []
 	var stem_files: Array[String] = []
 	for af: String in all_audio:
 		var base := af.get_basename().to_lower()
 		if base == "preview":
-			print("Audio: skipping preview file: %s" % af)
+			print("Audio: skipping preview: %s" % af)
 			continue
 		if base == "song":
 			song_files.append(af)
 		else:
 			stem_files.append(af)
 
-	# Determine loading strategy
+	# Determine which files to use
 	var to_load: Array[String] = []
 	if stem_files.size() >= 2:
-		# Multiple stems exist — load all stems, skip song.* (it's likely a full mix)
 		to_load = stem_files
-		print("Audio: STEM MODE — %d stems found, skipping song.* to avoid double audio" % stem_files.size())
+		print("Audio: STEM MODE — %d stems, skipping song.*" % stem_files.size())
 	elif song_files.size() > 0:
-		# Only song.* available
 		to_load.append(song_files[0])
-		print("Audio: SONG MODE — using %s" % song_files[0])
+		print("Audio: SONG MODE — %s" % song_files[0])
 	elif stem_files.size() == 1:
-		# Single non-song stem
 		to_load.append(stem_files[0])
-		print("Audio: SINGLE STEM MODE — using %s" % stem_files[0])
-	else:
-		# Fallback: load anything
-		if all_audio.size() > 0:
-			to_load.append(all_audio[0])
-			print("Audio: FALLBACK — using %s" % all_audio[0])
+		print("Audio: SINGLE STEM — %s" % stem_files[0])
+	elif all_audio.size() > 0:
+		to_load.append(all_audio[0])
+		print("Audio: FALLBACK — %s" % all_audio[0])
 
-	# Load all selected files
-	var loaded_count := 0
+	if to_load.is_empty():
+		_show_audio_error("Ses dosyasi bulunamadi!")
+		is_loading = false
+		return
+
+	# Build cache key from file names + dir
+	var cache_key := dir_path
+	for f2: String in to_load:
+		cache_key += "|" + f2
+	_cache_path = "user://cache/" + cache_key.md5_text() + ".pcm"
+
+	# Try cache
+	var cached := _load_from_cache()
+	if cached:
+		_setup_final_player(cached)
+		return
+
+	# No cache — load streams and start decode via AudioEffectCapture
+	var streams: Array = []
 	for i in range(to_load.size()):
 		var stem_fname: String = to_load[i]
-		loading_status = "Loading %s (%d/%d)..." % [stem_fname, i + 1, to_load.size()]
+		loading_status = "Kanal yukleniyor %s (%d/%d)..." % [stem_fname, i + 1, to_load.size()]
 		var stream = _load_audio_stream(dir_path.path_join(stem_fname))
 		if stream:
-			var player := AudioStreamPlayer.new()
-			player.stream = stream
-			add_child(player)
-			audio_players.append(player)
-			if master_player == null:
-				master_player = player
-			loaded_count += 1
-			print("Audio: loaded stem '%s' (%d/%d)" % [stem_fname, loaded_count, to_load.size()])
+			streams.append({"name": stem_fname, "stream": stream})
+
+	if streams.is_empty():
+		_show_audio_error("Hicbir ses dosyasi yuklenemedi!")
+		is_loading = false
+		return
+
+	# Set up decode bus (silent, with capture)
+	_decode_bus_idx = AudioServer.bus_count
+	AudioServer.set_bus_count(_decode_bus_idx + 1)
+	AudioServer.set_bus_name(_decode_bus_idx, "Decode")
+	AudioServer.set_bus_volume_db(_decode_bus_idx, -80.0)
+	_decode_capture = AudioEffectCapture.new()
+	_decode_capture.buffer_length = 2.0
+	AudioServer.add_bus_effect(_decode_bus_idx, _decode_capture)
+
+	# Play all stems on decode bus simultaneously
+	_decode_players.clear()
+	_decode_pcm.clear()
+	_decode_longest_sec = 0.0
+	_decode_start_ms = Time.get_ticks_msec()
+
+	for s in streams:
+		var player := AudioStreamPlayer.new()
+		player.stream = s["stream"]
+		player.bus = "Decode"
+		add_child(player)
+		_decode_players.append(player)
+		var length: float = s["stream"].get_length() if s["stream"].has_method("get_length") else 0.0
+		if length > _decode_longest_sec:
+			_decode_longest_sec = length
+		player.play()
+		print("Decode: started '%s' on Decode bus (length=%.1fs)" % [s["name"], length])
+
+	print("Decode: %d stems decoding, estimated %.0fs" % [_decode_players.size(), _decode_longest_sec])
+	loading_status = "Ses cozuluyor... 0%%"
+
+
+func _decode_step() -> void:
+	# Pull captured frames
+	var available := _decode_capture.get_frames_available()
+	if available > 0:
+		var frames := _decode_capture.get_buffer(available)
+		_decode_pcm.append_array(frames)
+
+	# Check progress
+	var all_done := true
+	var max_pos := 0.0
+	for p in _decode_players:
+		if p.playing:
+			all_done = false
+			max_pos = maxf(max_pos, p.get_playback_position())
 		else:
-			push_error("Audio: FAILED to load stem '%s'" % stem_fname)
+			max_pos = maxf(max_pos, _decode_longest_sec)
 
-	if audio_players.is_empty():
-		var err_msg := "Ses dosyasi bulunamadi! .opus/.ogg dosyalari eksik."
-		push_error("Audio: NO playable stems in %s" % dir_path)
-		_show_audio_error(err_msg)
+	if _decode_longest_sec > 0:
+		var pct := clampf(max_pos / _decode_longest_sec * 100.0, 0.0, 100.0)
+		loading_status = "Ses cozuluyor... %d%%" % int(pct)
 
-	print("Audio: loaded %d/%d stems, master=%s" % [
-		loaded_count, to_load.size(),
-		master_player.stream.resource_name if master_player else "NONE"])
+	if all_done:
+		# Grab any remaining frames
+		available = _decode_capture.get_frames_available()
+		if available > 0:
+			_decode_pcm.append_array(_decode_capture.get_buffer(available))
+		_finalize_decode()
+
+func _finalize_decode() -> void:
+	var decode_ms := Time.get_ticks_msec() - _decode_start_ms
+	var frame_count := _decode_pcm.size()
+	print("Decode: captured %d frames (%.1f sec) in %dms" % [
+		frame_count, float(frame_count) / 48000.0, decode_ms])
+
+	# Clean up decode players and bus
+	for p in _decode_players:
+		p.stop()
+		p.queue_free()
+	_decode_players.clear()
+	if _decode_bus_idx >= 0:
+		AudioServer.remove_bus(_decode_bus_idx)
+		_decode_bus_idx = -1
+	_decode_capture = null
+
+	if frame_count == 0:
+		_show_audio_error("Ses cozulemedi — bos PCM!")
+		is_loading = false
+		return
+
+	loading_status = "Ses birlestiriliyor..."
+
+	# Find peak for normalization (only scale down if clipping)
+	var peak: float = 0.001
+	for i in range(frame_count):
+		peak = maxf(peak, absf(_decode_pcm[i].x))
+		peak = maxf(peak, absf(_decode_pcm[i].y))
+	var gain := 1.0 / peak if peak > 1.0 else 1.0
+	print("Decode: peak=%.3f gain=%.3f" % [peak, gain])
+
+	# Convert to 16-bit stereo PCM
+	var wav_data := PackedByteArray()
+	wav_data.resize(frame_count * 4)
+	for i in range(frame_count):
+		var l := clampi(int(_decode_pcm[i].x * gain * 32767.0), -32768, 32767)
+		var r := clampi(int(_decode_pcm[i].y * gain * 32767.0), -32768, 32767)
+		wav_data.encode_s16(i * 4, l)
+		wav_data.encode_s16(i * 4 + 2, r)
+	_decode_pcm.clear()
+
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.stereo = true
+	wav.mix_rate = 48000
+	wav.data = wav_data
+
+	# Save to cache
+	_save_to_cache(wav_data)
+
+	_setup_final_player(wav)
+
+func _setup_final_player(wav: AudioStreamWAV) -> void:
+	var player := AudioStreamPlayer.new()
+	player.stream = wav
+	add_child(player)
+	audio_players.clear()
+	audio_players.append(player)
+	master_player = player
+	print("Audio: SINGLE player ready — WAV %d frames, %.1fs, 1 player" % [
+		wav.data.size() / 4, float(wav.data.size() / 4) / 48000.0])
 
 	is_loading = false
-	loading_status = ""
-	_start_song()
+	_countdown = 3.0
 
+func _save_to_cache(wav_data: PackedByteArray) -> void:
+	DirAccess.make_dir_recursive_absolute("user://cache")
+	var f := FileAccess.open(_cache_path, FileAccess.WRITE)
+	if f:
+		f.store_32(48000)
+		f.store_32(wav_data.size())
+		f.store_buffer(wav_data)
+		f.close()
+		print("Cache: SAVED %s (%d bytes, %.1f MB)" % [
+			_cache_path, wav_data.size(), float(wav_data.size()) / 1048576.0])
+	else:
+		push_error("Cache: failed to save %s" % _cache_path)
+
+func _load_from_cache() -> AudioStreamWAV:
+	var f := FileAccess.open(_cache_path, FileAccess.READ)
+	if f == null:
+		print("Cache: MISS %s" % _cache_path)
+		return null
+	var mix_rate_val := f.get_32()
+	var data_size := f.get_32()
+	if data_size == 0 or data_size > 200_000_000:
+		f.close()
+		print("Cache: CORRUPT (size=%d) %s" % [data_size, _cache_path])
+		return null
+	var wav_data := f.get_buffer(data_size)
+	f.close()
+	if wav_data.size() != data_size:
+		print("Cache: TRUNCATED %s" % _cache_path)
+		return null
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.stereo = true
+	wav.mix_rate = mix_rate_val
+	wav.data = wav_data
+	print("Cache: HIT %s (%d bytes, %.1f MB)" % [
+		_cache_path, data_size, float(data_size) / 1048576.0])
+	return wav
 
 func _clear_dir(path: String) -> void:
 	var dir := DirAccess.open(path)
@@ -562,52 +737,50 @@ func _show_audio_error(msg: String) -> void:
 
 # --- Playback ---
 
-func _start_song() -> void:
+func _start_playback() -> void:
 	song_started = true
-	_playback_ready = false
 	_first_hit_logged = false
+	_hit_log_count = 0
 	_start_ticks = Time.get_ticks_msec()
 	_play_call_time_ms = _start_ticks
-	for player in audio_players:
-		player.play()
-	print("Sync: play() called at ticks=%d, %d players started" % [_play_call_time_ms, audio_players.size()])
+	master_player.play()
+	print("Sync: play() at ticks=%d, 1 player, chart_offset=%.1fms" % [
+		_play_call_time_ms, _chart_offset_ms])
 
 func _get_song_time_ms() -> float:
 	if not master_player:
 		return 0.0
 	if not master_player.playing:
-		# Song ended — freeze at last known time
 		return song_time_ms
 	var t := master_player.get_playback_position()
 	t += AudioServer.get_time_since_last_mix()
 	t -= AudioServer.get_output_latency()
-	return t * 1000.0 + audio_offset_ms
+	return t * 1000.0 + _chart_offset_ms + audio_offset_ms
 
 # --- Main loop ---
 
 func _process(_delta: float) -> void:
+	# State: decoding stems via AudioEffectCapture
 	if is_loading:
+		if _decode_capture:
+			_decode_step()
 		loading_label.text = loading_status
 		queue_redraw()
 		return
+
+	# State: countdown before play
+	if _countdown > 0:
+		_countdown -= _delta
+		loading_label.text = str(ceili(_countdown))
+		queue_redraw()
+		if _countdown <= 0:
+			loading_label.text = ""
+			_start_playback()
+		return
+
 	loading_label.text = ""
 	if not song_started:
 		return
-
-	# Wait for audio to actually start producing samples
-	if not _playback_ready:
-		if master_player and master_player.playing:
-			var pos := master_player.get_playback_position()
-			if pos > 0.0:
-				_playback_ready = true
-				var latency_ms := Time.get_ticks_msec() - _play_call_time_ms
-				print("Sync: playback READY — position=%.4f, latency since play()=%dms" % [pos, latency_ms])
-			else:
-				loading_label.text = "Hazir..."
-				queue_redraw()
-				return
-		else:
-			return
 
 	song_time_ms = _get_song_time_ms()
 
@@ -703,7 +876,7 @@ func _update_hud() -> void:
 func _draw() -> void:
 	var vp := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, vp), BG_COLOR)
-	if is_loading:
+	if is_loading or _countdown > 0:
 		return
 
 	var lw := _lane_width()
@@ -820,7 +993,7 @@ func _lanes_start_x() -> float:
 # --- Input (press AND release) ---
 
 func _input(event: InputEvent) -> void:
-	if not song_started or is_loading or not _playback_ready:
+	if not song_started or is_loading or _countdown > 0:
 		return
 
 	var lane := -1
@@ -905,12 +1078,17 @@ func _try_hit(lane: int) -> void:
 		max_combo = combo
 	score += 50 * combo
 
-	# Log first hit
-	if not _first_hit_logged:
-		_first_hit_logged = true
-		var since_play := Time.get_ticks_msec() - _play_call_time_ms
-		print("Sync: FIRST HIT — song_time=%.1fms note_time=%.1fms diff=%.1fms since_play=%dms" % [
-			song_time_ms, float(n["time_ms"]), best_diff, since_play])
+	# Log first 20 hits for drift diagnosis
+	if _hit_log_count < 20:
+		_hit_log_count += 1
+		var signed_diff := song_time_ms - float(n["time_ms"])
+		if _hit_log_count == 1:
+			var since_play := Time.get_ticks_msec() - _play_call_time_ms
+			print("Sync: HIT #%d song=%.1f note=%.1f diff=%+.1f abs=%.1f since_play=%dms" % [
+				_hit_log_count, song_time_ms, float(n["time_ms"]), signed_diff, best_diff, since_play])
+		else:
+			print("Sync: HIT #%d song=%.1f note=%.1f diff=%+.1f abs=%.1f" % [
+				_hit_log_count, song_time_ms, float(n["time_ms"]), signed_diff, best_diff])
 
 	# Hit flash
 	hit_effects.append({"lane": lane, "alpha": 0.8})
@@ -926,4 +1104,9 @@ func _on_offset_changed(val: float) -> void:
 	offset_label.text = "Offset: %d ms" % int(val)
 
 func _exit_tree() -> void:
-	pass
+	for p in _decode_players:
+		if is_instance_valid(p):
+			p.stop()
+	if _decode_bus_idx >= 0 and _decode_bus_idx < AudioServer.bus_count:
+		AudioServer.remove_bus(_decode_bus_idx)
+		_decode_bus_idx = -1
