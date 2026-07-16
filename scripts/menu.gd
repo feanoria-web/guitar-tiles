@@ -2,6 +2,7 @@ extends Control
 
 const GameScript = preload("res://scripts/game.gd")
 const ChartParserScript = preload("res://scripts/chart_parser.gd")
+const MidiParserScript = preload("res://scripts/midi_parser.gd")
 const SngLoaderScript = preload("res://scripts/sng_loader.gd")
 
 var song_list: ItemList
@@ -110,7 +111,7 @@ func _scan_songs() -> void:
 		var fname := dir.get_next()
 		while fname != "":
 			if not dir.current_is_dir():
-				if fname.ends_with(".chart") or fname.ends_with(".sng"):
+				if fname.ends_with(".chart") or fname.ends_with(".sng") or fname.to_lower().ends_with(".mid"):
 					var full_path := scan_dir.path_join(fname)
 					found_songs.append({"path": full_path, "display_name": fname, "difficulties": []})
 			else:
@@ -132,7 +133,7 @@ func _scan_songs() -> void:
 		song_list.add_item(song["display_name"])
 
 	if found_songs.is_empty():
-		song_list.add_item("(No songs found -- add .chart or .sng to songs/)")
+		song_list.add_item("(No songs found -- add .chart, .mid or .sng to songs/)")
 
 	# Select first and load its difficulties
 	if found_songs.size() > 0:
@@ -151,12 +152,18 @@ func _on_song_selected(index: int) -> void:
 		var path: String = song["path"]
 		if path.ends_with(".chart"):
 			diffs = ChartParserScript.scan_difficulties_from_file(path)
+		elif path.to_lower().ends_with(".mid"):
+			# MIDI files typically have all 4 difficulties
+			diffs = ["Easy", "Medium", "Hard", "Expert"]
 		elif path.ends_with(".sng"):
 			var loader = SngLoaderScript.new()
 			if loader.load_sng(path):
-				var chart_text: String = loader.get_chart_text()
-				if chart_text != "":
-					diffs = ChartParserScript.scan_difficulties_from_text(chart_text)
+				if loader.has_chart():
+					var chart_text: String = loader.get_chart_text()
+					if chart_text != "":
+						diffs = ChartParserScript.scan_difficulties_from_text(chart_text)
+				elif loader.has_midi():
+					diffs = ["Easy", "Medium", "Hard", "Expert"]
 		song["difficulties"] = diffs
 
 	# Update difficulty dropdown

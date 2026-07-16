@@ -84,6 +84,24 @@ func get_chart_text() -> String:
 			return files[fname].get_string_from_utf8()
 	return ""
 
+func get_midi_data() -> PackedByteArray:
+	for fname in files:
+		if fname.to_lower().ends_with(".mid"):
+			return files[fname]
+	return PackedByteArray()
+
+func has_chart() -> bool:
+	for fname in files:
+		if fname.ends_with(".chart"):
+			return true
+	return false
+
+func has_midi() -> bool:
+	for fname in files:
+		if fname.to_lower().ends_with(".mid"):
+			return true
+	return false
+
 func get_audio_data(preferred: String = "song.opus") -> PackedByteArray:
 	if files.has(preferred):
 		return files[preferred]

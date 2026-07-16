@@ -114,21 +114,26 @@ func _parse_sync_track(lines: Array) -> void:
 	bpm_events.sort_custom(func(a, b): return a["tick"] < b["tick"])
 
 func _tick_to_ms(tick: int) -> float:
+	return tick_to_ms(tick, bpm_events, resolution)
+
+static func tick_to_ms(tick: int, bpm_events_arr: Array, res: int) -> float:
+	if bpm_events_arr.is_empty():
+		return 0.0
 	var ms := 0.0
 	var prev_tick := 0
-	var us_per_beat: float = 60000.0 / float(bpm_events[0]["bpm"])
+	var us_per_beat: float = 60000.0 / float(bpm_events_arr[0]["bpm"])
 
-	for i in range(bpm_events.size()):
-		var ev_tick: int = bpm_events[i]["tick"]
+	for i in range(bpm_events_arr.size()):
+		var ev_tick: int = bpm_events_arr[i]["tick"]
 		if ev_tick >= tick:
 			break
 		var delta_ticks: int = ev_tick - prev_tick
-		ms += (float(delta_ticks) / float(resolution)) * us_per_beat
+		ms += (float(delta_ticks) / float(res)) * us_per_beat
 		prev_tick = ev_tick
-		us_per_beat = 60000.0 / float(bpm_events[i]["bpm"])
+		us_per_beat = 60000.0 / float(bpm_events_arr[i]["bpm"])
 
 	var delta_ticks: int = tick - prev_tick
-	ms += (float(delta_ticks) / float(resolution)) * us_per_beat
+	ms += (float(delta_ticks) / float(res)) * us_per_beat
 	return ms
 
 func _parse_notes(lines: Array) -> void:

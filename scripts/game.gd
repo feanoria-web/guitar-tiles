@@ -1,6 +1,7 @@
 extends Control
 
 const ChartParserScript = preload("res://scripts/chart_parser.gd")
+const MidiParserScript = preload("res://scripts/midi_parser.gd")
 const SngLoaderScript = preload("res://scripts/sng_loader.gd")
 const PlayabilityScript = preload("res://scripts/playability.gd")
 
@@ -251,29 +252,67 @@ func _create_theme() -> Theme:
 func _load_song() -> void:
 	var source := song_source if song_source != "" else "res://notes.chart"
 	var difficulty := song_difficulty if song_difficulty != "" else "Expert"
-	var parser = ChartParserScript.new()
 	var sng_loader: RefCounted = null
+	var parse_ok := false
+	var parsed_notes: Array = []
+	var parsed_lyrics: Array = []
+	var parsed_resolution: int = 480
 
 	if source.ends_with(".sng"):
 		sng_loader = SngLoaderScript.new()
 		if not sng_loader.load_sng(source):
 			push_error("Game: failed to load .sng"); return
-		var chart_text: String = sng_loader.get_chart_text()
-		if chart_text == "":
-			push_error("Game: no chart in .sng"); return
-		parser.parse_text(chart_text, difficulty)
-	elif source.ends_with(".chart"):
-		parser.parse_file(source, difficulty)
-	else:
-		push_error("Game: unknown file type"); return
 
-	notes = parser.notes
-	lyric_phrases = parser.lyric_phrases
+		# Priority: .chart first, then .mid
+		if sng_loader.has_chart():
+			var parser = ChartParserScript.new()
+			var chart_text: String = sng_loader.get_chart_text()
+			parse_ok = parser.parse_text(chart_text, difficulty)
+			if parse_ok:
+				parsed_notes = parser.notes
+				parsed_lyrics = parser.lyric_phrases
+				parsed_resolution = parser.resolution
+				print("Game: parsed .chart from .sng")
+		if not parse_ok and sng_loader.has_midi():
+			var midi_parser = MidiParserScript.new()
+			var midi_data := sng_loader.get_midi_data()
+			parse_ok = midi_parser.parse_data(midi_data, difficulty)
+			if parse_ok:
+				parsed_notes = midi_parser.notes
+				parsed_lyrics = midi_parser.lyric_phrases
+				parsed_resolution = midi_parser.resolution
+				print("Game: parsed .mid from .sng")
+		if not parse_ok:
+			push_error("Game: no chart or midi in .sng"); return
+
+	elif source.ends_with(".chart"):
+		var parser = ChartParserScript.new()
+		parse_ok = parser.parse_file(source, difficulty)
+		if not parse_ok:
+			push_error("Game: failed to parse .chart"); return
+		parsed_notes = parser.notes
+		parsed_lyrics = parser.lyric_phrases
+		parsed_resolution = parser.resolution
+
+	elif source.ends_with(".mid"):
+		var midi_parser = MidiParserScript.new()
+		parse_ok = midi_parser.parse_file(source, difficulty)
+		if not parse_ok:
+			push_error("Game: failed to parse .mid"); return
+		parsed_notes = midi_parser.notes
+		parsed_lyrics = midi_parser.lyric_phrases
+		parsed_resolution = midi_parser.resolution
+
+	else:
+		push_error("Game: unknown file type: %s" % source); return
+
+	notes = parsed_notes
+	lyric_phrases = parsed_lyrics
 
 	# Apply playability processing
 	var playability = PlayabilityScript.new()
 	playability.apply_preset(song_preset)
-	notes = playability.process(notes, parser.resolution, lane_count)
+	notes = playability.process(notes, parsed_resolution, lane_count)
 
 	if song_mode == "piano":
 		_merge_piano_lanes()
