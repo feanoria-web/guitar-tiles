@@ -275,7 +275,7 @@ func _load_song() -> void:
 				print("Game: parsed .chart from .sng")
 		if not parse_ok and sng_loader.has_midi():
 			var midi_parser = MidiParserScript.new()
-			var midi_data := sng_loader.get_midi_data()
+			var midi_data: PackedByteArray = sng_loader.get_midi_data()
 			parse_ok = midi_parser.parse_data(midi_data, difficulty)
 			if parse_ok:
 				parsed_notes = midi_parser.notes
