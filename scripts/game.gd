@@ -95,6 +95,11 @@ static var song_mode: String = "guitar"
 static var song_preset: String = "Rahat"
 
 func _ready() -> void:
+	if ClassDB.class_exists("AudioStreamOpus"):
+		print("AUDIO: opus extension OK")
+	else:
+		push_error("AUDIO: opus extension MISSING — AudioStreamOpus class not found!")
+
 	if song_mode == "piano":
 		lane_count = 4
 		lane_colors.assign(PIANO_COLORS)
