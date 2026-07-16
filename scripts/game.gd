@@ -385,40 +385,115 @@ func _clear_dir(path: String) -> void:
 	dir.list_dir_end()
 
 func _load_audio_stream(path: String) -> AudioStream:
-	if path.ends_with(".ogg"):
-		var stream = AudioStreamOggVorbis.load_from_file(path)
+	var fname := path.get_file()
+	var ext := fname.get_extension().to_lower()
+	var loader_name := ""
+	var start_ms := Time.get_ticks_msec()
+	var stream: AudioStream = null
+	var mix_rate := AudioServer.get_mix_rate()
+
+	if ext == "ogg":
+		# Check for opus-inside-ogg via magic bytes
+		var probe := FileAccess.open(path, FileAccess.READ)
+		if probe:
+			var header := probe.get_buffer(mini(40, probe.get_length()))
+			probe.close()
+			var has_opus_head := false
+			for i in range(header.size() - 7):
+				if header[i] == 0x4F and header[i+1] == 0x70 and header[i+2] == 0x75 and header[i+3] == 0x73 \
+					and header[i+4] == 0x48 and header[i+5] == 0x65 and header[i+6] == 0x61 and header[i+7] == 0x64:
+					has_opus_head = true
+					break
+			if has_opus_head:
+				print("Audio: [%s] OGG container contains Opus data — routing to opus loader" % fname)
+				stream = _load_opus_stream(path)
+				loader_name = "opus (ogg container)"
+				var elapsed := Time.get_ticks_msec() - start_ms
+				_log_audio_load(fname, ext, loader_name, mix_rate, stream, elapsed)
+				return stream
+
+		loader_name = "native OggVorbis"
+		stream = AudioStreamOggVorbis.load_from_file(path)
 		if stream == null:
-			push_error("Audio: OGG load failed: %s" % path)
-		else:
-			print("Audio: OGG OK: %s" % path)
-		return stream
-	elif path.ends_with(".mp3"):
+			var err_msg := "Audio: OGG load FAILED: %s" % path
+			push_error(err_msg)
+			_show_audio_error(err_msg)
+	elif ext == "mp3":
+		loader_name = "native MP3"
 		var f := FileAccess.open(path, FileAccess.READ)
 		if f:
 			var mp3 := AudioStreamMP3.new()
 			mp3.data = f.get_buffer(f.get_length())
 			f.close()
-			print("Audio: MP3 OK: %s" % path)
-			return mp3
-		push_error("Audio: MP3 open failed: %s" % path)
-	elif path.ends_with(".opus"):
-		# Use audio-stream-plus GDExtension — load bytes directly (no resource cache)
-		var f := FileAccess.open(path, FileAccess.READ)
-		if f:
-			var data := f.get_buffer(f.get_length())
-			f.close()
-			if ClassDB.class_exists("AudioStreamOpus"):
-				var opus_stream = ClassDB.instantiate("AudioStreamOpus")
-				if opus_stream:
-					opus_stream.set("data", data)
-					print("Audio: Opus OK (%d bytes): %s" % [data.size(), path])
-					return opus_stream
-				push_error("Audio: AudioStreamOpus instantiate failed")
-			else:
-				push_error("Audio: AudioStreamOpus class not found — GDExtension not loaded!")
+			stream = mp3
 		else:
-			push_error("Audio: cannot open opus file: %s" % path)
-	return null
+			var err_msg := "Audio: MP3 open FAILED: %s" % path
+			push_error(err_msg)
+			_show_audio_error(err_msg)
+	elif ext == "opus":
+		loader_name = "audio-stream-plus (opus)"
+		stream = _load_opus_stream(path)
+	else:
+		var err_msg := "Audio: unsupported format '.%s': %s" % [ext, path]
+		push_error(err_msg)
+		_show_audio_error(err_msg)
+		return null
+
+	var elapsed := Time.get_ticks_msec() - start_ms
+	_log_audio_load(fname, ext, loader_name, mix_rate, stream, elapsed)
+	return stream
+
+func _load_opus_stream(path: String) -> AudioStream:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		var err_msg := "Audio: cannot open opus file: %s" % path
+		push_error(err_msg)
+		_show_audio_error(err_msg)
+		return null
+	var data := f.get_buffer(f.get_length())
+	f.close()
+	if not ClassDB.class_exists("AudioStreamOpus"):
+		var err_msg := "Audio: AudioStreamOpus class not found — GDExtension not loaded!"
+		push_error(err_msg)
+		_show_audio_error(err_msg)
+		return null
+	var opus_stream = ClassDB.instantiate("AudioStreamOpus")
+	if opus_stream == null:
+		var err_msg := "Audio: AudioStreamOpus instantiate failed"
+		push_error(err_msg)
+		_show_audio_error(err_msg)
+		return null
+	opus_stream.set("data", data)
+	return opus_stream
+
+func _log_audio_load(fname: String, ext: String, loader: String, mix_rate: float, stream: AudioStream, elapsed_ms: int) -> void:
+	if stream:
+		var sample_rate := "unknown"
+		var channels := "unknown"
+		if stream is AudioStreamOggVorbis:
+			sample_rate = "native"
+			channels = "native"
+		elif stream is AudioStreamMP3:
+			sample_rate = "native"
+			channels = "native"
+		elif stream is AudioStreamWAV:
+			sample_rate = str(int((stream as AudioStreamWAV).mix_rate))
+			channels = "stereo" if (stream as AudioStreamWAV).stereo else "mono"
+		else:
+			# AudioStreamOpus or other extension types
+			sample_rate = "48000 (opus default)"
+			channels = "stereo (opus default)"
+		print("Audio: LOADED [%s] ext=%s loader=%s sample_rate=%s channels=%s project_mix_rate=%d elapsed=%dms" % [
+			fname, ext, loader, sample_rate, channels, int(mix_rate), elapsed_ms])
+	else:
+		var err_msg := "Audio: FAILED [%s] ext=%s loader=%s elapsed=%dms" % [fname, ext, loader, elapsed_ms]
+		push_error(err_msg)
+		_show_audio_error(err_msg)
+
+func _show_audio_error(msg: String) -> void:
+	if warning_label:
+		warning_label.text = msg
+		warning_label.visible = true
 
 # --- Playback ---
 
