@@ -43,6 +43,9 @@ var current_phrase_idx: int = 0
 var lane_count: int = 5
 var lane_colors: Array[Color] = []
 var _start_ticks: int = 0
+var _playback_ready: bool = false  # true once playback position > 0
+var _first_hit_logged: bool = false
+var _play_call_time_ms: int = 0
 
 # Sustain hold tracking
 var lane_pressed: Array = []   # bool per lane
@@ -561,19 +564,24 @@ func _show_audio_error(msg: String) -> void:
 
 func _start_song() -> void:
 	song_started = true
+	_playback_ready = false
+	_first_hit_logged = false
 	_start_ticks = Time.get_ticks_msec()
+	_play_call_time_ms = _start_ticks
 	for player in audio_players:
 		player.play()
+	print("Sync: play() called at ticks=%d, %d players started" % [_play_call_time_ms, audio_players.size()])
 
 func _get_song_time_ms() -> float:
-	if master_player and master_player.playing:
-		var t := master_player.get_playback_position()
-		t += AudioServer.get_time_since_last_mix()
-		t -= AudioServer.get_output_latency()
-		return t * 1000.0 + audio_offset_ms
-	elif song_started:
-		return float(Time.get_ticks_msec() - _start_ticks) + audio_offset_ms
-	return 0.0
+	if not master_player:
+		return 0.0
+	if not master_player.playing:
+		# Song ended — freeze at last known time
+		return song_time_ms
+	var t := master_player.get_playback_position()
+	t += AudioServer.get_time_since_last_mix()
+	t -= AudioServer.get_output_latency()
+	return t * 1000.0 + audio_offset_ms
 
 # --- Main loop ---
 
@@ -585,6 +593,22 @@ func _process(_delta: float) -> void:
 	loading_label.text = ""
 	if not song_started:
 		return
+
+	# Wait for audio to actually start producing samples
+	if not _playback_ready:
+		if master_player and master_player.playing:
+			var pos := master_player.get_playback_position()
+			if pos > 0.0:
+				_playback_ready = true
+				var latency_ms := Time.get_ticks_msec() - _play_call_time_ms
+				print("Sync: playback READY — position=%.4f, latency since play()=%dms" % [pos, latency_ms])
+			else:
+				loading_label.text = "Hazir..."
+				queue_redraw()
+				return
+		else:
+			return
+
 	song_time_ms = _get_song_time_ms()
 
 	# Mark active notes past hit window as missed
@@ -796,7 +820,7 @@ func _lanes_start_x() -> float:
 # --- Input (press AND release) ---
 
 func _input(event: InputEvent) -> void:
-	if not song_started or is_loading:
+	if not song_started or is_loading or not _playback_ready:
 		return
 
 	var lane := -1
@@ -881,10 +905,17 @@ func _try_hit(lane: int) -> void:
 		max_combo = combo
 	score += 50 * combo
 
+	# Log first hit
+	if not _first_hit_logged:
+		_first_hit_logged = true
+		var since_play := Time.get_ticks_msec() - _play_call_time_ms
+		print("Sync: FIRST HIT — song_time=%.1fms note_time=%.1fms diff=%.1fms since_play=%dms" % [
+			song_time_ms, float(n["time_ms"]), best_diff, since_play])
+
 	# Hit flash
 	hit_effects.append({"lane": lane, "alpha": 0.8})
 
-	# Combo scale animation
+	# Combo scale animation (reuse tween to avoid micro-stutter from allocation)
 	if combo >= 2:
 		var tw := create_tween()
 		tw.tween_property(combo_label, "scale", Vector2(1.25, 1.25), 0.07)
