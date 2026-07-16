@@ -324,49 +324,72 @@ func _load_stems_from_dir(dir_path: String) -> void:
 		var fname := dir.get_next()
 		while fname != "":
 			if not dir.current_is_dir():
-				if fname.ends_with(".opus") or fname.ends_with(".ogg") or fname.ends_with(".mp3"):
+				var fl := fname.to_lower()
+				if fl.ends_with(".opus") or fl.ends_with(".ogg") or fl.ends_with(".mp3"):
 					all_audio.append(fname)
 			fname = dir.get_next()
 		dir.list_dir_end()
 	print("Audio: found files: %s" % str(all_audio))
 
-	# Load only the main "song" stem (mixed audio) to avoid mono/stereo glitches
-	var priority := ["song", "guitar", "rhythm", "vocals"]
-	for stem_name in priority:
-		for ext in [".opus", ".ogg", ".mp3"]:
-			var fname2: String = stem_name + ext
-			if all_audio.has(fname2):
-				loading_status = "Loading %s..." % fname2
-				var stream = _load_audio_stream(dir_path.path_join(fname2))
-				if stream:
-					var player := AudioStreamPlayer.new()
-					player.stream = stream
-					add_child(player)
-					audio_players.append(player)
-					master_player = player
-					print("Game: loaded '%s'" % fname2)
-				break
-		if not audio_players.is_empty():
-			break
+	# Categorize files: song.*, preview.*, stems
+	var song_files: Array[String] = []
+	var stem_files: Array[String] = []
+	for af: String in all_audio:
+		var base := af.get_basename().to_lower()
+		if base == "preview":
+			print("Audio: skipping preview file: %s" % af)
+			continue
+		if base == "song":
+			song_files.append(af)
+		else:
+			stem_files.append(af)
 
-	# Fallback: load ANY audio file
-	if audio_players.is_empty():
-		for fname3: String in all_audio:
-			loading_status = "Loading %s..." % fname3
-			var stream = _load_audio_stream(dir_path.path_join(fname3))
-			if stream:
-				var player := AudioStreamPlayer.new()
-				player.stream = stream
-				add_child(player)
-				audio_players.append(player)
+	# Determine loading strategy
+	var to_load: Array[String] = []
+	if stem_files.size() >= 2:
+		# Multiple stems exist — load all stems, skip song.* (it's likely a full mix)
+		to_load = stem_files
+		print("Audio: STEM MODE — %d stems found, skipping song.* to avoid double audio" % stem_files.size())
+	elif song_files.size() > 0:
+		# Only song.* available
+		to_load.append(song_files[0])
+		print("Audio: SONG MODE — using %s" % song_files[0])
+	elif stem_files.size() == 1:
+		# Single non-song stem
+		to_load.append(stem_files[0])
+		print("Audio: SINGLE STEM MODE — using %s" % stem_files[0])
+	else:
+		# Fallback: load anything
+		if all_audio.size() > 0:
+			to_load.append(all_audio[0])
+			print("Audio: FALLBACK — using %s" % all_audio[0])
+
+	# Load all selected files
+	var loaded_count := 0
+	for i in range(to_load.size()):
+		var stem_fname: String = to_load[i]
+		loading_status = "Loading %s (%d/%d)..." % [stem_fname, i + 1, to_load.size()]
+		var stream = _load_audio_stream(dir_path.path_join(stem_fname))
+		if stream:
+			var player := AudioStreamPlayer.new()
+			player.stream = stream
+			add_child(player)
+			audio_players.append(player)
+			if master_player == null:
 				master_player = player
-				print("Game: loaded '%s' (fallback)" % fname3)
-				break
+			loaded_count += 1
+			print("Audio: loaded stem '%s' (%d/%d)" % [stem_fname, loaded_count, to_load.size()])
+		else:
+			push_error("Audio: FAILED to load stem '%s'" % stem_fname)
 
 	if audio_players.is_empty():
+		var err_msg := "Ses dosyasi bulunamadi! .opus/.ogg dosyalari eksik."
 		push_error("Audio: NO playable stems in %s" % dir_path)
-		warning_label.text = "Ses dosyasi bulunamadi! .opus/.ogg dosyalari eksik."
-		warning_label.visible = true
+		_show_audio_error(err_msg)
+
+	print("Audio: loaded %d/%d stems, master=%s" % [
+		loaded_count, to_load.size(),
+		master_player.stream.resource_name if master_player else "NONE"])
 
 	is_loading = false
 	loading_status = ""
