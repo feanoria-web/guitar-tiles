@@ -1,51 +1,113 @@
-# Guitar Tiles
+# 🎸 Guitar Tiles
 
-Clone Hero chart dosyalarini oynatan, 5 seritli dokunmatik/tik tabanli ritim oyunu prototipi (Godot 4.x).
+**Turn any guitar chart into a mobile rhythm game — instantly.**
 
-## Nasil Calistirilir
+Guitar Tiles transforms Clone Hero, Rock Band, and custom song charts into a fast, fluid tap experience on your phone. No controllers. No cables. Just you, your music, and your reflexes.
 
-1. Godot 4.7+ ile projeyi ac
-2. `songs/` klasorune `.chart` veya `.sng` dosyalarini koy
-3. Projeyi calistir — menu ekraninda sarkilar listelenir
-4. Bir sarki sec ve "Play" tikla
+---
 
-Proje kokunde `notes.chart` varsa menude de gorunur.
+## ✨ Features
 
-## Dosya Yapisi
+### 🎵 Play Any Song
+- **Clone Hero (.chart, .mid, .sng)** — drop in your existing library
+- **Rock Band 3 (Xbox 360 CON/LIVE)** — full STFS container support with auto-extraction
+- **ZIP bundles** — download community packs and import directly
+- **Multi-stem mixing** — all instruments blended into one crystal-clear audio track
 
+### 🎮 Multiple Play Modes
+| Preset | Style |
+|--------|-------|
+| **Tiles** | Simplified for mobile — pure rhythm, no chords |
+| **Rahat** | Relaxed — slightly more notes, still comfortable |
+| **Normal** | Faithful to the original chart with chords |
+| **Sadık** | 100% original — every note, every chord, no mercy |
+
+### 🎸 Full Instrument Support
+- Guitar / Bass / Keys / Drums
+- All difficulty levels: Easy → Expert
+- Automatic instrument detection from chart files
+
+### 📱 Designed for Mobile
+- Portrait & landscape orientations
+- Touch-optimized highway with invisible edge padding
+- Smooth alpha-fade note approach
+- Hit ring animations & miss flash feedback
+- Combo multiplier system with tier-based glow effects (up to 20x!)
+
+### 🏆 Progress Tracking
+- 5-star rating system
+- Per-song score persistence
+- Best score saved per instrument/difficulty/preset combo
+- Combo milestone celebrations (25, 50, 100, 200, 300, 500)
+
+### ⚡ Performance
+- Pre-decoded audio cache — zero lag on replay
+- Native Android audio pipeline (MediaCodec) — no external dependencies
+- Memory-mapped mixing — plays 11-channel Rock Band stems without breaking a sweat
+- Peak normalization prevents clipping across any number of stems
+
+---
+
+## 📲 Getting Started
+
+1. **Download** the latest APK from [Releases](../../releases)
+2. **Add songs** — tap the "+" button and import .sng, .chart, .mid, .zip, or .con files
+3. **Pick your instrument**, difficulty, and play style
+4. **Hit BAŞLAT** and shred
+
+---
+
+## 🎶 Supported Formats
+
+| Format | Source | Notes |
+|--------|--------|-------|
+| `.sng` | Clone Hero | Single-file package, plug & play |
+| `.chart` | Moonscraper / CH | + audio files in same folder |
+| `.mid` | Rock Band / FoF | MIDI chart + stems |
+| `.zip` | Community packs | Auto-extracts chart + audio + art |
+| `.con` / `.live` | Xbox 360 RB3 | Full STFS parsing, MOGG decoding |
+
+---
+
+## 🛠 Tech Stack
+
+- **Engine**: Godot 4.7 (GDScript)
+- **Android Audio**: Custom Kotlin plugin using MediaCodec API
+- **Architecture**: MappedByteBuffer accumulator for unlimited stem mixing
+- **Rendering**: Mobile renderer, optimized for 60fps on mid-range devices
+- **Zero dependencies**: No ffmpeg-kit, no native .so libs — pure platform APIs
+
+---
+
+## 🏗 Building from Source
+
+```bash
+# Build the Android audio plugin
+cd native_audio_decoder
+./gradlew assembleRelease
+
+# AAR is output to:
+# native_audio_decoder/build/outputs/aar/NativeAudioDecoder-release.aar
+# Copy to addons/NativeAudioDecoder/
+
+# Open project in Godot 4.7 and export to Android
 ```
-songs/               <- sarki dosyalarini buraya koy
-  sarki.sng          <- Clone Hero .sng paketi
-  sarki/
-    notes.chart      <- veya acik chart dosyasi
-    song.ogg         <- ses dosyasi (opsiyonel)
-scripts/
-  chart_parser.gd    <- .chart dosyasi parser (BPM degisimli tick->ms)
-  sng_loader.gd      <- .sng paketi acici (XOR sifre cozme)
-  game.gd            <- oynanis mantigi
-  menu.gd            <- sarki secim menusu
-scenes/
-  game.tscn          <- oyun sahnesi
-  menu.tscn          <- menu sahnesi
-```
 
-## Kontroller
+---
 
-- **Dokunmatik / Fare**: Ekranin 5 serit bolgesine tikla/dokun
-- **Klavye**: A-S-D-F-G veya 1-2-3-4-5 tuslari (serit 0-4)
-- **Offset slider**: Sag altta, cihaz gecikme telafisi icin +-200 ms
+## 📸 Screenshots
 
-## Ses Formatlari
+*Coming soon*
 
-- `.ogg` (Vorbis) ve `.mp3` desteklenir
-- `.opus` Godot tarafindan desteklenmez — `.ogg`'a donusturmeniz gerekir
-- Ses dosyasi chart ile ayni klasorde `song.ogg`, `song.mp3`, `guitar.ogg` veya `audio.ogg` olarak aranir
+---
 
-## Bilinen Eksikler
+## 📄 License
 
-- Sustain (uzun) notalar sadece gorsel, tutma mekanigi yok
-- Lyric gosterimi henuz yok (parse ediliyor ama goruntulenmyor)
-- Zorluk secimi yok (sadece ExpertSingle)
-- Coklu ses kanali destegi yok (sadece ana ses dosyasi calinir)
-- Skor tablosu / sonuc ekrani yok
-- .sng icindeki opus ses dosyasi icin otomatik donusum yok
+This project is provided as-is for personal and educational use.
+
+---
+
+<p align="center">
+  <b>Your charts. Your phone. Your stage.</b><br>
+  <i>Guitar Tiles — rhythm gaming, unchained.</i>
+</p>
