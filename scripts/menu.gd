@@ -26,6 +26,17 @@ const MIX_CACHE_DIR := "user://cache"
 
 # Import status
 var _import_status_label: Label = null
+var _import_progress_label: Label = null
+var _import_progress_bar: ProgressBar = null
+var _import_in_progress: bool = false
+var _import_pending_folder: String = ""
+var _import_pending_raw_ogg: String = ""
+var _import_decode_plugin = null
+
+# Scroll-friendly tap detection
+var _card_touch_start: Vector2 = Vector2.ZERO
+var _card_touch_index: int = -1
+const SCROLL_TAP_THRESHOLD := 20.0  # pixels — beyond this it's a scroll, not a tap
 
 # Launch screen state
 var _launch_overlay: Control = null
@@ -250,10 +261,26 @@ func _get_best_stars_for_song(song: Dictionary) -> int:
 	return best
 
 func _on_card_input(event: InputEvent, index: int, _panel: PanelContainer) -> void:
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		_open_launch_screen(index)
-	elif event is InputEventScreenTouch and event.pressed:
-		_open_launch_screen(index)
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_card_touch_start = event.position
+			_card_touch_index = index
+		else:
+			if _card_touch_index == index:
+				var dist := _card_touch_start.distance_to(event.position)
+				if dist < SCROLL_TAP_THRESHOLD:
+					_open_launch_screen(index)
+			_card_touch_index = -1
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			_card_touch_start = event.position
+			_card_touch_index = index
+		else:
+			if _card_touch_index == index:
+				var dist := _card_touch_start.distance_to(event.position)
+				if dist < SCROLL_TAP_THRESHOLD:
+					_open_launch_screen(index)
+			_card_touch_index = -1
 
 # --- Song scanning ---
 
@@ -675,6 +702,22 @@ func _open_launch_screen(index: int) -> void:
 	_launch_approach_label.custom_minimum_size = Vector2(36, 0)
 	speed_hbox.add_child(_launch_approach_label)
 
+	# --- Cache'i Yenile button ---
+	var cache_btn := Button.new()
+	cache_btn.text = "Cache'i Yenile"
+	cache_btn.add_theme_font_size_override("font_size", 16)
+	cache_btn.add_theme_color_override("font_color", TEXT_DIM)
+	var cache_style := StyleBoxFlat.new()
+	cache_style.bg_color = Color(0.12, 0.12, 0.16)
+	cache_style.set_corner_radius_all(8)
+	cache_style.content_margin_left = 12; cache_style.content_margin_right = 12
+	cache_style.content_margin_top = 8; cache_style.content_margin_bottom = 8
+	cache_style.border_color = Color(0.25, 0.25, 0.32)
+	cache_style.set_border_width_all(1)
+	cache_btn.add_theme_stylebox_override("normal", cache_style)
+	cache_btn.pressed.connect(_on_clear_cache.bind(song))
+	vbox.add_child(cache_btn)
+
 	# --- Spacer ---
 	var spacer := Control.new()
 	spacer.custom_minimum_size = Vector2(0, 8)
@@ -712,6 +755,53 @@ func _close_launch_screen() -> void:
 	if _launch_overlay:
 		_launch_overlay.queue_free()
 		_launch_overlay = null
+
+func _on_clear_cache(song: Dictionary) -> void:
+	var cache_key: String = String(song["path"]).md5_text()
+	var deleted := 0
+	# 1. Delete cached mix files
+	for ext in ["_mixed.ogg", "_mixed.wav"]:
+		var cached := MIX_CACHE_DIR.path_join(cache_key + ext)
+		if FileAccess.file_exists(cached):
+			DirAccess.remove_absolute(cached)
+			deleted += 1
+			print("Cache: silindi — %s" % cached)
+
+	# 2. If song dir has a pre-converted song.wav from old import + raw mogg,
+	#    delete the bad song.wav so it gets re-converted from raw source next time
+	var song_dir: String = String(song["path"]).get_base_dir()
+	if song_dir.begins_with("user://"):
+		var raw_mogg := song_dir.path_join("_raw_mogg.ogg")
+		var bad_wav := song_dir.path_join("song.wav")
+		var bad_ogg := song_dir.path_join("song.ogg")
+		# If raw multi-ch OGG exists, the converted file is suspect — delete it
+		if FileAccess.file_exists(raw_mogg):
+			if FileAccess.file_exists(bad_wav):
+				DirAccess.remove_absolute(bad_wav)
+				deleted += 1
+				print("Cache: eski song.wav silindi (raw mogg'dan yeniden olusturulacak)")
+			if FileAccess.file_exists(bad_ogg):
+				DirAccess.remove_absolute(bad_ogg)
+				deleted += 1
+				print("Cache: eski song.ogg silindi (raw mogg'dan yeniden olusturulacak)")
+			# Re-convert raw mogg → stereo now (async on Android)
+			var stereo_path := song_dir.path_join("song.ogg")
+			if _convert_mogg_to_stereo(raw_mogg, stereo_path):
+				if OS.has_feature("android"):
+					return  # async — _on_import_decode_done handles the rest
+				else:
+					deleted += 1
+		elif FileAccess.file_exists(bad_wav):
+			# No raw mogg but has song.wav — might have wrong sample rate header
+			# Delete it + force re-decode from original source during playback
+			DirAccess.remove_absolute(bad_wav)
+			deleted += 1
+			print("Cache: song.wav silindi (sample rate düzeltmesi)")
+
+	if deleted > 0:
+		_show_import_status("Cache temizlendi — sonraki oynatmada yeniden olusturulacak.")
+	else:
+		_show_import_status("Bu sarki icin cache bulunamadi.")
 
 func _on_delete_song() -> void:
 	if _launch_song_index < 0 or _launch_song_index >= found_songs.size():
@@ -825,14 +915,21 @@ func _load_album_art(song: Dictionary) -> ImageTexture:
 	return null
 
 func _image_from_bytes(data: PackedByteArray) -> ImageTexture:
-	var img := Image.new()
-	# Try JPEG first, then PNG
-	if img.load_jpg_from_buffer(data) == OK:
-		pass
-	elif img.load_png_from_buffer(data) == OK:
-		pass
-	else:
+	if data.size() < 4:
 		return null
+	# Skip Xbox DXT textures (png_xbox) — not standard PNG/JPEG, can't decode
+	# Real JPEG starts with FF D8, real PNG starts with 89 50 4E 47
+	var is_jpeg := (data[0] == 0xFF and data[1] == 0xD8)
+	var is_png := (data[0] == 0x89 and data[1] == 0x50 and data[2] == 0x4E and data[3] == 0x47)
+	if not is_jpeg and not is_png:
+		return null
+	var img := Image.new()
+	if is_jpeg:
+		if img.load_jpg_from_buffer(data) != OK:
+			return null
+	else:
+		if img.load_png_from_buffer(data) != OK:
+			return null
 	# Resize for display performance
 	if img.get_width() > 256 or img.get_height() > 256:
 		img.resize(256, 256, Image.INTERPOLATE_LANCZOS)
@@ -1018,6 +1115,9 @@ func _on_files_selected(status: bool, selected: PackedStringArray, _idx: int) ->
 		# Clean up temp file if we copied from content URI
 		if path.begins_with("content://") and actual_path != "" and FileAccess.file_exists(actual_path):
 			DirAccess.remove_absolute(actual_path)
+	if _import_in_progress:
+		# Android async import — scan will happen when decode completes
+		return
 	if imported > 0:
 		_show_import_status("%d sarki eklendi!" % imported)
 		_scan_songs()
@@ -1173,9 +1273,15 @@ func _import_con(con_path: String) -> bool:
 		if mogg.save_ogg_to_file(mogg_data, raw_ogg_path):
 			# Convert multi-channel OGG to stereo
 			var stereo_path := dest_dir.path_join("song.ogg")
-			if _convert_mogg_to_stereo(raw_ogg_path, stereo_path):
-				saved += 1
-				DirAccess.remove_absolute(raw_ogg_path)
+			var convert_ok := _convert_mogg_to_stereo(raw_ogg_path, stereo_path)
+			if convert_ok:
+				if OS.has_feature("android"):
+					# Async path: conversion started on worker thread
+					# _on_import_decode_done will handle cleanup + scan
+					saved += 1  # count audio as saved (will appear after decode)
+				else:
+					saved += 1
+					DirAccess.remove_absolute(raw_ogg_path)
 			else:
 				# Fallback: keep raw OGG, desktop ffmpeg will handle during playback
 				DirAccess.rename_absolute(raw_ogg_path, stereo_path)
@@ -1193,21 +1299,26 @@ func _import_con(con_path: String) -> bool:
 			f.store_string(dta_text)
 			f.close()
 
-	# Save album art
+	# Save album art — only save standard formats (skip Xbox DXT textures)
 	var art_data := stfs.get_album_art_data()
-	if art_data.size() > 0:
-		# Detect format from header
-		var ext := ".png"
-		if art_data.size() >= 2 and art_data[0] == 0xFF and art_data[1] == 0xD8:
-			ext = ".jpg"
-		var art_path := dest_dir.path_join("album" + ext)
-		var f := FileAccess.open(art_path, FileAccess.WRITE)
-		if f:
-			f.store_buffer(art_data)
-			f.close()
-			print("Import: saved album art (%d bytes)" % art_data.size())
+	if art_data.size() >= 4:
+		var is_jpeg := (art_data[0] == 0xFF and art_data[1] == 0xD8)
+		var is_png := (art_data[0] == 0x89 and art_data[1] == 0x50 and art_data[2] == 0x4E and art_data[3] == 0x47)
+		if is_jpeg or is_png:
+			var ext := ".jpg" if is_jpeg else ".png"
+			var art_path := dest_dir.path_join("album" + ext)
+			var f := FileAccess.open(art_path, FileAccess.WRITE)
+			if f:
+				f.store_buffer(art_data)
+				f.close()
+				print("Import: saved album art (%d bytes)" % art_data.size())
+		else:
+			print("Import: skipped Xbox texture album art (unsupported format)")
 
 	print("Import: CON extracted to %s (%d files)" % [folder_name, saved])
+	# On Android with async decode, return true even if only MIDI is saved so far
+	if OS.has_feature("android") and _import_in_progress:
+		return saved >= 1  # MIDI saved, audio is being decoded async
 	return saved >= 2  # Need at least MIDI + audio
 
 func _convert_mogg_to_stereo(input_ogg: String, output_path: String) -> bool:
@@ -1215,29 +1326,30 @@ func _convert_mogg_to_stereo(input_ogg: String, output_path: String) -> bool:
 	var os_output := ProjectSettings.globalize_path(output_path)
 
 	if OS.has_feature("android"):
-		# Android: use NativeAudioDecoder to decode multi-ch OGG → stereo WAV
+		# Android: use async decodeAndMix (worker thread) — NEVER block render thread
 		if not Engine.has_singleton("NativeAudioDecoder"):
 			return false
 		var plugin = Engine.get_singleton("NativeAudioDecoder")
-		# decodeAndMix with single input handles multi-channel → stereo downmix
-		# But it's async... use sync approach: save as WAV directly
 		var wav_output := output_path.get_base_dir().path_join("song.wav")
 		var os_wav := ProjectSettings.globalize_path(wav_output)
-		# Call sync decode for import (blocking is OK during import)
-		var result = plugin.call("decodeToStereoWav", os_input, os_wav)
-		if result == null or str(result) != "":
-			print("Import: Android stereo convert failed: %s" % str(result))
-			return false
-		# Rename wav to the output path (keep as wav, game handles both)
-		if wav_output != output_path:
-			var final_wav := output_path.get_base_dir().path_join("song.wav")
-			if final_wav != wav_output:
-				DirAccess.rename_absolute(wav_output, final_wav)
-		print("Import: Android converted to stereo WAV")
-		return true
+		# Store state for async completion
+		_import_pending_raw_ogg = input_ogg
+		_import_pending_folder = output_path.get_base_dir()
+		_import_in_progress = true
+		_import_decode_plugin = plugin
+		# Connect signals
+		if not plugin.is_connected("decode_progress", _on_import_decode_progress):
+			plugin.connect("decode_progress", _on_import_decode_progress)
+		if not plugin.is_connected("decode_done", _on_import_decode_done):
+			plugin.connect("decode_done", _on_import_decode_done)
+		if not plugin.is_connected("decode_failed", _on_import_decode_failed):
+			plugin.connect("decode_failed", _on_import_decode_failed)
+		# Use decodeAndMix with single input — handles multi-ch→stereo on worker thread
+		plugin.call("decodeAndMix", [os_input], os_wav)
+		_show_import_progress("Dönüştürülüyor...")
+		return true  # async — will complete via signal
 	else:
-		# PC: use ffmpeg
-		# Probe channel count
+		# PC: use ffmpeg (fast enough to not block)
 		var probe_output: Array = []
 		OS.execute("ffprobe", [
 			"-v", "error", "-select_streams", "a:0",
@@ -1250,7 +1362,6 @@ func _convert_mogg_to_stereo(input_ogg: String, output_path: String) -> bool:
 
 		var args: Array = ["-hide_banner", "-i", os_input]
 		if ch_count > 2:
-			# Build pan filter for multi-channel
 			var left := ""
 			var right := ""
 			var scale := "%.4f" % (1.0 / ((ch_count + 1) / 2))
@@ -1275,6 +1386,66 @@ func _convert_mogg_to_stereo(input_ogg: String, output_path: String) -> bool:
 			return false
 		print("Import: converted to stereo OGG")
 		return true
+
+func _on_import_decode_progress(pct: int, stage: String) -> void:
+	if _import_progress_label:
+		_import_progress_label.text = "%s %%%d" % [stage, pct]
+	if _import_progress_bar:
+		_import_progress_bar.value = pct
+		_import_progress_bar.visible = true
+
+func _on_import_decode_done(_wav_path: String) -> void:
+	print("Import: async stereo conversion done — %s" % _wav_path)
+	# Remove raw multi-ch OGG
+	if _import_pending_raw_ogg != "" and FileAccess.file_exists(_import_pending_raw_ogg):
+		DirAccess.remove_absolute(_import_pending_raw_ogg)
+	_import_in_progress = false
+	_disconnect_import_signals()
+	_hide_import_progress()
+	_show_import_status("Sarki eklendi!")
+	_scan_songs()
+
+func _on_import_decode_failed(error: String) -> void:
+	print("Import: async stereo conversion failed — %s" % error)
+	_import_in_progress = false
+	_disconnect_import_signals()
+	_hide_import_progress()
+	if error != "Cancelled":
+		_show_import_status("Dönüştürme hatası: %s" % error)
+
+func _disconnect_import_signals() -> void:
+	if _import_decode_plugin == null:
+		return
+	if _import_decode_plugin.is_connected("decode_progress", _on_import_decode_progress):
+		_import_decode_plugin.disconnect("decode_progress", _on_import_decode_progress)
+	if _import_decode_plugin.is_connected("decode_done", _on_import_decode_done):
+		_import_decode_plugin.disconnect("decode_done", _on_import_decode_done)
+	if _import_decode_plugin.is_connected("decode_failed", _on_import_decode_failed):
+		_import_decode_plugin.disconnect("decode_failed", _on_import_decode_failed)
+	_import_decode_plugin = null
+
+func _show_import_progress(text: String) -> void:
+	if _import_progress_label == null:
+		_import_progress_label = Label.new()
+		_import_progress_label.add_theme_font_size_override("font_size", 18)
+		_import_progress_label.add_theme_color_override("font_color", ACCENT)
+		_import_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		card_container.add_child(_import_progress_label)
+	if _import_progress_bar == null:
+		_import_progress_bar = ProgressBar.new()
+		_import_progress_bar.show_percentage = false
+		_import_progress_bar.max_value = 100
+		_import_progress_bar.custom_minimum_size = Vector2(0, 6)
+		_import_progress_bar.visible = false
+		card_container.add_child(_import_progress_bar)
+	_import_progress_label.text = text
+	_import_progress_label.visible = true
+
+func _hide_import_progress() -> void:
+	if _import_progress_label:
+		_import_progress_label.visible = false
+	if _import_progress_bar:
+		_import_progress_bar.visible = false
 
 func _import_zip(zip_path: String) -> bool:
 	var reader := ZIPReader.new()

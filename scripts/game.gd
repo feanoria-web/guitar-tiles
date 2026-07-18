@@ -571,13 +571,20 @@ func _load_album_art_for_loading() -> ImageTexture:
 	return null
 
 func _image_from_bytes(data: PackedByteArray) -> ImageTexture:
-	var img := Image.new()
-	if img.load_jpg_from_buffer(data) == OK:
-		pass
-	elif img.load_png_from_buffer(data) == OK:
-		pass
-	else:
+	if data.size() < 4:
 		return null
+	# Skip Xbox DXT textures (png_xbox) — not standard PNG/JPEG
+	var is_jpeg := (data[0] == 0xFF and data[1] == 0xD8)
+	var is_png := (data[0] == 0x89 and data[1] == 0x50 and data[2] == 0x4E and data[3] == 0x47)
+	if not is_jpeg and not is_png:
+		return null
+	var img := Image.new()
+	if is_jpeg:
+		if img.load_jpg_from_buffer(data) != OK:
+			return null
+	else:
+		if img.load_png_from_buffer(data) != OK:
+			return null
 	if img.get_width() > 256 or img.get_height() > 256:
 		img.resize(256, 256, Image.INTERPOLATE_LANCZOS)
 	return ImageTexture.create_from_image(img)

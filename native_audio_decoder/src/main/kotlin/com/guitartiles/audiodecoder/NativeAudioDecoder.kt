@@ -25,7 +25,6 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
     companion object {
         private const val TAG = "godot"
         private const val PREFIX = "NativeAudioDecoder: "
-        private const val TARGET_RATE = 48000
         private const val TARGET_CH = 2
     }
 
@@ -95,18 +94,24 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
         try {
             if (cancelFlag.get()) { emitFailed("Cancelled"); return }
 
-            // 1. Pre-scan max duration across all stems
+            // 1. Pre-scan max duration and detect source sample rate
             var maxDurationUs = 0L
+            var detectedRate = 0
             for (path in inputPaths) {
                 val dur = getAudioDurationUs(path)
                 if (dur > maxDurationUs) maxDurationUs = dur
+                val rate = getAudioSampleRate(path)
+                if (rate > 0 && detectedRate == 0) detectedRate = rate
             }
             if (maxDurationUs <= 0L) {
                 maxDurationUs = 15L * 60 * 1_000_000
                 Log.w(TAG, "${PREFIX}could not read duration, using 15 min fallback")
             }
+            if (detectedRate <= 0) detectedRate = 48000
+            var outputRate = detectedRate
+            Log.i(TAG, "${PREFIX}output sample rate = $outputRate Hz (from source)")
 
-            val maxFrames = ((maxDurationUs / 1_000_000.0 + 2.0) * TARGET_RATE * 1.05).toLong()
+            val maxFrames = ((maxDurationUs / 1_000_000.0 + 2.0) * outputRate * 1.05).toLong()
             val maxSamples = maxFrames * TARGET_CH
             val fileSizeBytes = maxSamples * 4
             Log.i(TAG, "${PREFIX}accum file: %.1f MB for ~%.0fs max duration".format(
@@ -142,11 +147,16 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 val stemT0 = System.currentTimeMillis()
 
                 try {
-                    val stemLen = streamDecodeIntoMapped(path, floatBuf, maxSamples.toInt(), idx, total)
-                    if (stemLen > 0) {
-                        if (stemLen > actualLen) actualLen = stemLen
+                    val result = streamDecodeIntoMapped(path, floatBuf, maxSamples.toInt(), idx, total, outputRate)
+                    if (result.writePos > 0) {
+                        if (result.writePos > actualLen) actualLen = result.writePos
+                        // Use the ACTUAL decoded rate (from MediaCodec output) for WAV header
+                        if (result.actualRate > 0 && result.actualRate != outputRate) {
+                            Log.w(TAG, "${PREFIX}  actual decoded rate ${result.actualRate}Hz differs from pre-scan ${outputRate}Hz — using ${result.actualRate}Hz")
+                            outputRate = result.actualRate
+                        }
                         decodedCount++
-                        val durationSec = stemLen.toFloat() / TARGET_CH / TARGET_RATE
+                        val durationSec = result.writePos.toFloat() / TARGET_CH / outputRate
                         val stemMs = System.currentTimeMillis() - stemT0
                         Log.i(TAG, "${PREFIX}  done $fname, %.1fs, decoded+accumulated in ${stemMs}ms".format(durationSec))
                     } else {
@@ -194,8 +204,8 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
 
             emitProgress(90, "WAV yazılıyor...")
 
-            // 5. Write WAV
-            writeWavFromMapped(floatBuf, actualLen, peak, normalized, outputWav)
+            // 5. Write WAV (using source's actual sample rate — no resampling)
+            writeWavFromMapped(floatBuf, actualLen, peak, normalized, outputWav, outputRate)
 
             // 6. Cleanup temp file
             try { channel.close() } catch (_: Throwable) {}
@@ -204,7 +214,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             channel = null; raf = null; tempFile = null
 
             val elapsed = System.currentTimeMillis() - t0
-            Log.i(TAG, "${PREFIX}mixed $decodedCount stems (preview excluded) in ${elapsed}ms, peak=%.1f, normalized=$normalized, RAM stable".format(peak))
+            Log.i(TAG, "${PREFIX}mixed $decodedCount stems (preview excluded) in ${elapsed}ms, rate=${outputRate}Hz, peak=%.1f, normalized=$normalized, RAM stable".format(peak))
             logHeap("finished")
 
             emitProgress(100, "Tamamlandı")
@@ -272,6 +282,26 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
         Log.i(TAG, "${PREFIX}heap [$label]: used=${usedMB}MB, max=${maxMB}MB")
     }
 
+    /** Read audio sample rate from MediaFormat. Returns 0 if unavailable. */
+    private fun getAudioSampleRate(path: String): Int {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(path)
+            for (i in 0 until extractor.trackCount) {
+                val fmt = extractor.getTrackFormat(i)
+                val mime = fmt.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("audio/")) {
+                    return fmt.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "${PREFIX}getAudioSampleRate failed for $path: ${e.message}")
+        } finally {
+            extractor.release()
+        }
+        return 0
+    }
+
     /** Read audio duration in microseconds from MediaFormat. Returns 0 if unavailable. */
     private fun getAudioDurationUs(path: String): Long {
         val extractor = MediaExtractor()
@@ -300,13 +330,19 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
      *
      * @return total stereo samples written, or 0 on failure/cancel.
      */
+    /**
+     * Result from streamDecodeIntoMapped — carries both sample count and actual sample rate.
+     */
+    private data class DecodeResult(val writePos: Int, val actualRate: Int)
+
     private fun streamDecodeIntoMapped(
         filePath: String,
         floatBuf: FloatBuffer,
         maxSamples: Int,
         stemIdx: Int,
-        totalStems: Int
-    ): Int {
+        totalStems: Int,
+        expectedRate: Int
+    ): DecodeResult {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
 
@@ -322,12 +358,17 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                     trackIdx = i; format = tf; break
                 }
             }
-            if (trackIdx < 0 || format == null) return 0
+            if (trackIdx < 0 || format == null) return DecodeResult(0, expectedRate)
 
             val mime = format.getString(MediaFormat.KEY_MIME)!!
             var sampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            Log.i(TAG, "${PREFIX}  track: $mime ${sampleRate}Hz ${channels}ch")
+            val originalChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var channels = originalChannels
+            Log.i(TAG, "${PREFIX}  track: $mime ${sampleRate}Hz ${channels}ch (expected output: ${expectedRate}Hz)")
+
+            if (sampleRate != expectedRate) {
+                Log.w(TAG, "${PREFIX}  WARNING: stem rate $sampleRate != expected $expectedRate — accumulating at native rate (no resample)")
+            }
 
             // Get duration for intra-stem progress
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
@@ -342,13 +383,13 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             var inputDone = false
             var outputDone = false
             var writePos = 0
-            val needsResample = sampleRate != TARGET_RATE
-            var resampleSrcFraction = 0.0
             var lastProgressPct = -1
             val fname = File(filePath).name
+            var totalSrcSamples = 0L
+            var totalWrittenSamples = 0L
 
             while (!outputDone) {
-                if (cancelFlag.get()) return 0
+                if (cancelFlag.get()) return DecodeResult(0, sampleRate)
 
                 // Feed input
                 if (!inputDone) {
@@ -366,7 +407,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                     }
                 }
 
-                // Drain output
+                // Drain output — no resampling, accumulate at native rate
                 val outIdx = codec.dequeueOutputBuffer(info, 10_000)
                 when {
                     outIdx >= 0 -> {
@@ -376,29 +417,10 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                             val shortBuf = outBuf.asShortBuffer()
                             val shortCount = info.size / 2
 
-                            if (!needsResample) {
-                                writePos = accumulateChunk(shortBuf, shortCount, channels, floatBuf, writePos, maxSamples)
-                            } else {
-                                val chunk = ShortArray(shortCount)
-                                shortBuf.get(chunk)
-                                val stereoChunk = chunkToStereo(chunk, channels)
-                                val srcFrames = stereoChunk.size / TARGET_CH
-                                val ratio = TARGET_RATE.toDouble() / sampleRate
-                                var srcIdx = resampleSrcFraction
-                                while (srcIdx < srcFrames - 1 && writePos + 1 < maxSamples) {
-                                    val idx = srcIdx.toInt()
-                                    val frac = (srcIdx - idx).toFloat()
-                                    for (c in 0 until TARGET_CH) {
-                                        val s0 = stereoChunk[idx * TARGET_CH + c].toFloat()
-                                        val s1 = stereoChunk[(idx + 1) * TARGET_CH + c].toFloat()
-                                        floatBuf.put(writePos, floatBuf.get(writePos) + s0 + frac * (s1 - s0))
-                                        writePos++
-                                    }
-                                    srcIdx += 1.0 / ratio
-                                }
-                                resampleSrcFraction = srcIdx - (srcFrames - 1)
-                                if (resampleSrcFraction < 0) resampleSrcFraction = 0.0
-                            }
+                            totalSrcSamples += shortCount
+                            val prevPos = writePos
+                            writePos = accumulateChunk(shortBuf, shortCount, channels, floatBuf, writePos, maxSamples)
+                            totalWrittenSamples += (writePos - prevPos)
 
                             // Intra-stem progress (~5% steps)
                             if (durationUs > 0 && info.presentationTimeUs >= 0) {
@@ -422,13 +444,28 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                         val newRate = nf.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         val newCh = nf.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                         Log.i(TAG, "${PREFIX}  format changed: ${newRate}Hz ${newCh}ch (was ${sampleRate}Hz ${channels}ch)")
-                        sampleRate = newRate
-                        channels = newCh
+                        // Update sample rate from codec output
+                        if (newRate > 0) sampleRate = newRate
+                        // GUARD: Don't trust 1ch when source is multi-channel.
+                        // MediaCodec Vorbis decoder bug: reports 1ch but PCM data is still
+                        // fully interleaved with all original channels.
+                        if (newCh > 1) {
+                            channels = newCh
+                        } else if (originalChannels > 1) {
+                            Log.w(TAG, "${PREFIX}  IGNORING 1ch report — keeping ${originalChannels}ch (MediaCodec Vorbis multi-ch bug)")
+                            channels = originalChannels
+                        } else {
+                            channels = newCh
+                        }
                     }
                 }
             }
 
-            return writePos
+            val srcDurationSec = totalSrcSamples.toFloat() / channels / sampleRate
+            val outDurationSec = totalWrittenSamples.toFloat() / TARGET_CH / sampleRate
+            Log.i(TAG, "${PREFIX}  $fname: src=${totalSrcSamples} samples (${srcDurationSec}s @ ${sampleRate}Hz ${channels}ch), written=${totalWrittenSamples} stereo samples (${outDurationSec}s @ ${sampleRate}Hz)")
+
+            return DecodeResult(writePos, sampleRate)
 
         } finally {
             try { codec?.stop() } catch (_: Throwable) {}
@@ -478,34 +515,12 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
         return pos
     }
 
-    /** Convert a short chunk to stereo (small temp buffer). */
-    private fun chunkToStereo(data: ShortArray, srcCh: Int): ShortArray {
-        if (srcCh == TARGET_CH) return data
-        if (srcCh == 1) {
-            val out = ShortArray(data.size * 2)
-            for (i in data.indices) { out[i * 2] = data[i]; out[i * 2 + 1] = data[i] }
-            return out
-        }
-        val frames = data.size / srcCh
-        val out = ShortArray(frames * 2)
-        for (f in 0 until frames) {
-            var left = 0; var right = 0
-            for (c in 0 until srcCh) {
-                val s = data[f * srcCh + c].toInt()
-                if (c % 2 == 0) left += s else right += s
-            }
-            out[f * 2] = max(-32768, min(32767, left)).toShort()
-            out[f * 2 + 1] = max(-32768, min(32767, right)).toShort()
-        }
-        return out
-    }
-
     /** Stream WAV output from the mapped FloatBuffer with on-the-fly normalization. */
     private fun writeWavFromMapped(
-        floatBuf: FloatBuffer, accumLen: Int, peak: Float, normalized: Boolean, path: String
+        floatBuf: FloatBuffer, accumLen: Int, peak: Float, normalized: Boolean, path: String, sampleRate: Int
     ) {
         val dataSize = accumLen * 2
-        val byteRate = TARGET_RATE * TARGET_CH * 2
+        val byteRate = sampleRate * TARGET_CH * 2
 
         File(path).parentFile?.mkdirs()
 
@@ -518,7 +533,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             header.putInt(16)
             header.putShort(1)
             header.putShort(TARGET_CH.toShort())
-            header.putInt(TARGET_RATE)
+            header.putInt(sampleRate)
             header.putInt(byteRate)
             header.putShort((TARGET_CH * 2).toShort())
             header.putShort(16)
@@ -546,7 +561,8 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 offset = end
             }
         }
-        Log.i(TAG, "${PREFIX}WAV written: $path (${dataSize / 1024}KB, ${accumLen / TARGET_CH / TARGET_RATE}s)")
+        val durationSec = accumLen / TARGET_CH / sampleRate
+        Log.i(TAG, "${PREFIX}WAV written: $path (${dataSize / 1024}KB, ${durationSec}s @ ${sampleRate}Hz)")
     }
 
     /**
@@ -564,7 +580,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
 
             var audioTrack = -1
             var mime = ""
-            var sampleRate = TARGET_RATE
+            var sampleRate = 44100
             var channels = 2
             for (i in 0 until extractor.trackCount) {
                 val fmt = extractor.getTrackFormat(i)
@@ -578,16 +594,17 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 }
             }
             if (audioTrack < 0) return "No audio track found"
-            Log.i(TAG, "${PREFIX}  source: $mime ${sampleRate}Hz ${channels}ch")
+            val originalChannels = channels
+            Log.i(TAG, "${PREFIX}  source: $mime ${sampleRate}Hz ${channels}ch — will write WAV at ${sampleRate}Hz (no resample)")
 
             extractor.selectTrack(audioTrack)
 
-            // Get duration for buffer sizing
+            // Get duration for buffer sizing — use SOURCE rate, not a fixed target
             val format = extractor.getTrackFormat(audioTrack)
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION))
                 format.getLong(MediaFormat.KEY_DURATION) else 600_000_000L
             val durationSec = (durationUs / 1_000_000.0).toFloat()
-            val maxFrames = ((durationSec + 10) * TARGET_RATE).toInt()
+            val maxFrames = ((durationSec + 10) * sampleRate).toInt()
             val maxSamples = maxFrames * TARGET_CH
 
             // Memory-mapped accumulator
@@ -599,7 +616,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             val mappedBuf = channel.map(FileChannel.MapMode.READ_WRITE, 0, fileSizeBytes)
             val floatBuf = mappedBuf.order(ByteOrder.nativeOrder()).asFloatBuffer()
 
-            // Decode
+            // Decode — no resampling, accumulate at native rate
             val codec = MediaCodec.createDecoderByType(mime)
             codec.configure(format, null, null, 0)
             codec.start()
@@ -609,6 +626,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             var outputDone = false
             var writePos = 0
             var actualChannels = channels
+            var totalSrcSamples = 0L
 
             while (!outputDone) {
                 if (!inputDone) {
@@ -635,6 +653,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                         val shortCount = info.size / 2
 
                         if (shortCount > 0) {
+                            totalSrcSamples += shortCount
                             writePos = accumulateChunk(shortBuf, shortCount, actualChannels, floatBuf, writePos, maxSamples)
                         }
 
@@ -645,10 +664,17 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                     }
                     outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         val newFormat = codec.outputFormat
+                        val newRate = newFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                         val newCh = newFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-                        Log.i(TAG, "${PREFIX}  format changed: ${newCh}ch (was ${actualChannels}ch)")
-                        // Keep original channel count if MediaCodec wrongly reports 1ch for multi-ch
+                        Log.i(TAG, "${PREFIX}  format changed: ${newRate}Hz ${newCh}ch (was ${sampleRate}Hz ${actualChannels}ch)")
+                        if (newRate > 0) sampleRate = newRate
+                        // GUARD: Don't trust 1ch when source is multi-channel (Vorbis decoder bug)
                         if (newCh > 1) {
+                            actualChannels = newCh
+                        } else if (originalChannels > 1) {
+                            Log.w(TAG, "${PREFIX}  IGNORING 1ch report — keeping ${originalChannels}ch (MediaCodec Vorbis multi-ch bug)")
+                            actualChannels = originalChannels
+                        } else {
                             actualChannels = newCh
                         }
                     }
@@ -659,22 +685,24 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             codec.release()
             extractor.release()
 
-            // Find peak for normalization check
+            // Find peak for normalization
             var peak = 0f
             for (i in 0 until writePos) {
                 val v = abs(floatBuf.get(i))
                 if (v > peak) peak = v
             }
+            val shouldNormalize = peak > 32767f
 
-            // Write WAV
-            writeWavFromMapped(floatBuf, writePos, peak, false, outputWav)
+            // Write WAV with SOURCE sample rate
+            writeWavFromMapped(floatBuf, writePos, peak, shouldNormalize, outputWav, sampleRate)
 
             // Cleanup temp
             try { channel.close() } catch (_: Throwable) {}
             try { raf.close() } catch (_: Throwable) {}
             try { tempFile.delete() } catch (_: Throwable) {}
 
-            Log.i(TAG, "${PREFIX}decodeToStereoWav done: ${writePos / TARGET_CH / TARGET_RATE}s, peak=$peak")
+            val outDurationSec = writePos.toFloat() / TARGET_CH / sampleRate
+            Log.i(TAG, "${PREFIX}decodeToStereoWav done: src=${totalSrcSamples} samples (${actualChannels}ch), out=${writePos} stereo samples, ${outDurationSec}s @ ${sampleRate}Hz, peak=$peak, normalized=$shouldNormalize")
             return ""
         } catch (e: Throwable) {
             Log.e(TAG, "${PREFIX}decodeToStereoWav failed: ${e.message}", e)
