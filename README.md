@@ -103,7 +103,7 @@ cd native_audio_decoder
 
 ## 📄 License
 
-This project is provided as-is for personal and educational use.
+MIT — see [LICENSE](LICENSE) for details.
 
 ---
 

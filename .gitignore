@@ -6,3 +6,10 @@
 *.apk
 *.idsig
 *.aab
+
+# Song content (copyrighted — not distributed with the player)
+songs/
+notes.chart
+
+# Local IDE/tool config
+.claude/
