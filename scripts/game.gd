@@ -4,13 +4,30 @@ const ChartParserScript = preload("res://scripts/chart_parser.gd")
 const MidiParserScript = preload("res://scripts/midi_parser.gd")
 const SngLoaderScript = preload("res://scripts/sng_loader.gd")
 const PlayabilityScript = preload("res://scripts/playability.gd")
+const StfsParserScript = preload("res://scripts/stfs_parser.gd")
+const MoggHandlerScript = preload("res://scripts/mogg_handler.gd")
 
 # --- Config ---
-const APPROACH_TIME_MS := 2500.0
-const HIT_WINDOW_MS := 150.0
-const HIT_LINE_RATIO := 0.85
-const HIGHWAY_RATIO := 0.60
-const HIT_LINGER_MS := 1200.0  # how long hit notes stay visible past hit line
+const HIT_WINDOW_MS := 200.0
+const HIT_LINGER_MS := 1200.0
+
+# Layout params per orientation {portrait, landscape}
+const LAYOUT := {
+	"portrait": {
+		"highway_ratio": 1.0,    # full width
+		"hit_line_ratio": 0.82,  # from top (18% from bottom)
+		"note_h_ratio": 0.55,   # note height = lane_width * this
+		"approach_default": 1.4,
+	},
+	"landscape": {
+		"highway_ratio": 0.60,  # 60% centered
+		"hit_line_ratio": 0.85,
+		"note_h_ratio": 0.42,
+		"approach_default": 1.15,
+	},
+}
+
+var _orientation: String = "portrait"  # set from Settings before _ready
 
 const GUITAR_COLORS: Array[Color] = [
 	Color(0.18, 0.85, 0.18),  Color(0.9, 0.15, 0.15),
@@ -26,7 +43,6 @@ const LANE_BG := Color(0.12, 0.12, 0.15, 0.55)
 const LANE_BORDER := Color(0.22, 0.22, 0.28, 0.4)
 const HIT_LINE_COLOR := Color(1, 1, 1, 0.6)
 
-const ESSENTIAL_STEMS: Array[String] = ["song", "guitar", "rhythm", "vocals"]
 
 # Note states: 0=active, 1=hit(darkened,scrolling), 2=missed, 3=sustain_holding
 var notes: Array = []
@@ -48,15 +64,10 @@ var _play_call_time_ms: int = 0
 var _hit_log_count: int = 0
 var _chart_offset_ms: float = 0.0
 
-# Decode pipeline (AudioEffectCapture → single AudioStreamWAV)
-var _decode_bus_idx: int = -1
-var _decode_capture: AudioEffectCapture = null
-var _decode_players: Array[AudioStreamPlayer] = []
-var _decode_pcm: PackedVector2Array = PackedVector2Array()
-var _decode_start_ms: int = 0
-var _decode_longest_sec: float = 0.0
-var _cache_path: String = ""
 var _countdown: float = -1.0
+
+# Pre-mix cache directory
+const MIX_CACHE_DIR := "user://cache"
 
 # Sustain hold tracking
 var lane_pressed: Array = []   # bool per lane
@@ -64,10 +75,38 @@ var held_sustain: Array = []   # note index per lane (-1 = none)
 
 # Hit flash effects
 var hit_effects: Array = []
+# Hit ring animations [{lane, radius, alpha, max_radius}]
+var hit_rings: Array = []
+# Miss flash (red edge flash)
+var _miss_flash_alpha: float = 0.0
+# Miss/wrong-tap lane flashes: [{lane, alpha}]
+var _miss_lane_flashes: Array = []
+# Combo milestone popup
+var _milestone_text: String = ""
+var _milestone_alpha: float = 0.0
+var _milestone_scale: float = 1.0
+
+# Combo multiplier + glow tiers: [min_combo, multiplier, glow_color, label]
+const COMBO_TIERS := [
+	[500, 20.0, Color(1.0, 0.2, 0.9, 0.7),  "20x"],   # magenta
+	[300, 15.0, Color(1.0, 0.3, 0.15, 0.7),  "15x"],   # orange-red
+	[200, 12.0, Color(1.0, 0.55, 0.05, 0.65), "12x"],   # orange
+	[100, 10.0, Color(1.0, 0.85, 0.1, 0.6),  "10x"],   # gold
+	[50,  5.0,  Color(0.3, 0.9, 1.0, 0.5),   "5x"],    # cyan
+	[25,  2.5,  Color(1.0, 1.0, 1.0, 0.4),   "2.5x"],  # white
+]
+var _combo_glow_color := Color.TRANSPARENT
+var _combo_multiplier := 1.0
+
+# Stats for result screen
+var total_notes: int = 0
+var hit_count: int = 0
+var miss_count: int = 0
 
 # Loading
 var is_loading: bool = false
 var loading_status: String = ""
+var loading_progress: float = 0.0
 
 # Nodes
 var audio_players: Array[AudioStreamPlayer] = []
@@ -75,12 +114,25 @@ var master_player: AudioStreamPlayer = null
 var hud_layer: CanvasLayer
 var score_label: Label
 var combo_label: Label
+var lyric_panel: PanelContainer
 var lyric_rtl: RichTextLabel
-var loading_label: Label
 var warning_label: Label
 var progress_bar: ProgressBar
 var offset_slider: HSlider
 var offset_label: Label
+var milestone_label: Label
+var rest_timer_label: Label
+
+# Loading screen
+var loading_layer: CanvasLayer
+var loading_status_label: Label
+var loading_bar: ProgressBar
+var loading_song_label: Label
+var loading_artist_label: Label
+var loading_info_label: Label
+var loading_dots_timer: float = 0.0
+var _pending_cached_path: String = ""
+var _decode_plugin = null
 
 # Note style caches
 var note_styles: Array[StyleBoxFlat] = []
@@ -92,13 +144,18 @@ var sustain_styles_hold: Array[StyleBoxFlat] = []
 static var song_source: String = ""
 static var song_difficulty: String = "Expert"
 static var song_mode: String = "guitar"
-static var song_preset: String = "Rahat"
+static var song_preset: String = "Tiles"
+static var song_instrument: String = "guitar"
 
 func _ready() -> void:
-	if ClassDB.class_exists("AudioStreamOpus"):
-		print("AUDIO: opus extension OK")
-	else:
-		push_error("AUDIO: opus extension MISSING — AudioStreamOpus class not found!")
+	Settings.load_settings()
+	_orientation = Settings.orientation
+
+	if OS.has_feature("android"):
+		if Engine.has_singleton("NativeAudioDecoder"):
+			print("AUDIO: NativeAudioDecoder plugin OK")
+		else:
+			push_error("AUDIO: NativeAudioDecoder plugin NOT found!")
 
 	if song_mode == "piano":
 		lane_count = 4
@@ -174,52 +231,93 @@ func _build_ui() -> void:
 	hud_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.theme = theme
+	# Apply safe area insets so HUD avoids notch/rounded corners
+	var safe := DisplayServer.get_display_safe_area()
+	var screen := DisplayServer.screen_get_size()
+	if screen.x > 0 and screen.y > 0:
+		var vp := get_viewport_rect().size
+		var scale_x := vp.x / float(screen.x)
+		var scale_y := vp.y / float(screen.y)
+		var inset_left := safe.position.x * scale_x
+		var inset_top := safe.position.y * scale_y
+		var inset_right := (screen.x - safe.end.x) * scale_x
+		var inset_bottom := (screen.y - safe.end.y) * scale_y
+		hud_root.offset_left = inset_left
+		hud_root.offset_top = inset_top
+		hud_root.offset_right = -inset_right
+		hud_root.offset_bottom = -inset_bottom
+		if inset_left + inset_top + inset_right + inset_bottom > 0:
+			print("UI: safe area insets L=%.0f T=%.0f R=%.0f B=%.0f" % [inset_left, inset_top, inset_right, inset_bottom])
 	hud_layer.add_child(hud_root)
 
+	# Score — top center
 	score_label = Label.new()
-	score_label.text = "Score: 0"
-	score_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	score_label.offset_left = 16; score_label.offset_top = 12
-	score_label.add_theme_font_size_override("font_size", 28)
+	score_label.text = "0"
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_label.anchor_left = 0.0; score_label.anchor_right = 1.0
+	score_label.anchor_top = 0.0; score_label.offset_top = 8
+	score_label.add_theme_font_size_override("font_size", 24)
+	score_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75, 0.8))
+	score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hud_root.add_child(score_label)
 
+	# Progress bar — thin, top
+	progress_bar = ProgressBar.new()
+	progress_bar.show_percentage = false
+	progress_bar.anchor_left = 0.0; progress_bar.anchor_right = 1.0
+	progress_bar.anchor_top = 0.0; progress_bar.offset_top = 0
+	progress_bar.size.y = 3
+	progress_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_root.add_child(progress_bar)
+
+	# Menu button — top left, small
 	var back_btn := Button.new()
-	back_btn.text = "Menu"
+	back_btn.text = "< "
 	back_btn.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	back_btn.offset_left = 16; back_btn.offset_top = 48
-	back_btn.size = Vector2(72, 30)
+	back_btn.offset_left = 8; back_btn.offset_top = 6
+	back_btn.size = Vector2(48, 32)
 	back_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	back_btn.add_theme_font_size_override("font_size", 16)
 	back_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
 	hud_root.add_child(back_btn)
 
+	# Combo — big, positioned above hit line
 	combo_label = Label.new()
 	combo_label.text = ""
-	combo_label.add_theme_font_size_override("font_size", 44)
+	combo_label.add_theme_font_size_override("font_size", 52)
+	combo_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	combo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	combo_label.anchor_left = 0.3; combo_label.anchor_right = 0.7
-	combo_label.anchor_top = 0.0; combo_label.offset_top = 8
-	combo_label.size.y = 55
-	combo_label.pivot_offset = Vector2(combo_label.size.x / 2.0, combo_label.size.y / 2.0)
+	combo_label.anchor_left = 0.0; combo_label.anchor_right = 1.0
+	var hlr2: float = _lp()["hit_line_ratio"]
+	combo_label.anchor_top = hlr2 - 0.12; combo_label.anchor_bottom = hlr2 - 0.02
+	combo_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# pivot_offset set after layout so scale animation centers properly
+	combo_label.resized.connect(func(): combo_label.pivot_offset = combo_label.size / 2.0)
 	hud_root.add_child(combo_label)
 
-	progress_bar = ProgressBar.new()
-	progress_bar.show_percentage = false
-	progress_bar.anchor_left = 0.35; progress_bar.anchor_right = 0.65
-	progress_bar.anchor_top = 0.0; progress_bar.offset_top = 62
-	progress_bar.size.y = 6
-	hud_root.add_child(progress_bar)
+	# Lyrics box — positioned above combo label, near hit line
+	lyric_panel = PanelContainer.new()
+	var lyric_style := StyleBoxFlat.new()
+	lyric_style.bg_color = Color(0.10, 0.10, 0.13, 0.0)
+	lyric_style.set_corner_radius_all(14)
+	lyric_style.content_margin_left = 20; lyric_style.content_margin_right = 20
+	lyric_style.content_margin_top = 10; lyric_style.content_margin_bottom = 10
+	lyric_panel.add_theme_stylebox_override("panel", lyric_style)
+	lyric_panel.anchor_left = 0.05; lyric_panel.anchor_right = 0.95
+	lyric_panel.anchor_top = hlr2 - 0.22; lyric_panel.anchor_bottom = hlr2 - 0.13
+	lyric_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lyric_panel.visible = false
+	hud_root.add_child(lyric_panel)
 
 	lyric_rtl = RichTextLabel.new()
 	lyric_rtl.bbcode_enabled = true
 	lyric_rtl.fit_content = true
 	lyric_rtl.scroll_active = false
 	lyric_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	lyric_rtl.anchor_left = 0.1; lyric_rtl.anchor_right = 0.9
-	lyric_rtl.anchor_top = HIT_LINE_RATIO + 0.02
-	lyric_rtl.anchor_bottom = HIT_LINE_RATIO + 0.08
-	lyric_rtl.add_theme_font_size_override("normal_font_size", 24)
-	lyric_rtl.add_theme_color_override("default_color", Color(0.5, 0.5, 0.55))
-	hud_root.add_child(lyric_rtl)
+	lyric_rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	lyric_rtl.add_theme_font_size_override("normal_font_size", 32)
+	lyric_rtl.add_theme_color_override("default_color", Color(0.6, 0.6, 0.65))
+	lyric_panel.add_child(lyric_rtl)
 
 	offset_label = Label.new()
 	offset_label.text = "Offset: 0 ms"
@@ -237,15 +335,35 @@ func _build_ui() -> void:
 	offset_slider.value_changed.connect(_on_offset_changed)
 	hud_root.add_child(offset_slider)
 
-	loading_label = Label.new()
-	loading_label.text = ""
-	loading_label.add_theme_font_size_override("font_size", 32)
-	loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	loading_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	loading_label.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	loading_label.size = Vector2(500, 50)
-	loading_label.offset_left = -250; loading_label.offset_top = -25
-	hud_root.add_child(loading_label)
+	# Loading screen (separate CanvasLayer, above everything)
+	_build_loading_screen()
+
+	# Combo milestone popup
+	milestone_label = Label.new()
+	milestone_label.text = ""
+	milestone_label.add_theme_font_size_override("font_size", 64)
+	milestone_label.add_theme_color_override("font_color", Color(1, 0.85, 0.2))
+	milestone_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	milestone_label.anchor_left = 0.0; milestone_label.anchor_right = 1.0
+	milestone_label.anchor_top = 0.35; milestone_label.anchor_bottom = 0.5
+	milestone_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	milestone_label.modulate.a = 0.0
+	milestone_label.resized.connect(func(): milestone_label.pivot_offset = milestone_label.size / 2.0)
+	hud_root.add_child(milestone_label)
+
+	# Rest timer — shows countdown when next note is far away
+	rest_timer_label = Label.new()
+	rest_timer_label.text = ""
+	rest_timer_label.add_theme_font_size_override("font_size", 40)
+	rest_timer_label.add_theme_color_override("font_color", Color(0.6, 0.7, 0.9, 0.8))
+	rest_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rest_timer_label.anchor_left = 0.0; rest_timer_label.anchor_right = 1.0
+	var hlr3: float = _lp()["hit_line_ratio"]
+	rest_timer_label.anchor_top = hlr3 + 0.04
+	rest_timer_label.anchor_bottom = hlr3 + 0.12
+	rest_timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rest_timer_label.visible = false
+	hud_root.add_child(rest_timer_label)
 
 	warning_label = Label.new()
 	warning_label.text = ""
@@ -260,15 +378,230 @@ func _build_ui() -> void:
 
 func _create_theme() -> Theme:
 	var t := Theme.new()
+	var font_bold := load("res://fonts/Inter-Bold.ttf") as Font
+	var font_regular := load("res://fonts/Inter-Regular.ttf") as Font
+	if font_bold:
+		t.set_default_font(font_bold)
+	if font_regular:
+		t.set_font("font", "Label", font_regular)
+		t.set_font("font", "RichTextLabel", font_regular)
+	if font_bold:
+		t.set_font("font", "Button", font_bold)
 	t.set_color("font_color", "Label", Color(0.9, 0.9, 0.95))
-	t.set_color("font_color", "Button", Color(0.85, 0.85, 0.9))
+	t.set_color("font_color", "Button", Color(0.9, 0.9, 0.95))
 	t.set_font_size("font_size", "Label", 20)
-	t.set_font_size("font_size", "Button", 16)
+	t.set_font_size("font_size", "Button", 20)
+
+	var btn_n := StyleBoxFlat.new()
+	btn_n.bg_color = Color(0.2, 0.45, 0.9, 0.85)
+	btn_n.set_corner_radius_all(10)
+	btn_n.content_margin_left = 20; btn_n.content_margin_right = 20
+	btn_n.content_margin_top = 14; btn_n.content_margin_bottom = 14
+	t.set_stylebox("normal", "Button", btn_n)
+	var btn_h := btn_n.duplicate()
+	btn_h.bg_color = Color(0.3, 0.55, 1.0)
+	t.set_stylebox("hover", "Button", btn_h)
+	var btn_p := btn_n.duplicate()
+	btn_p.bg_color = Color(0.35, 0.6, 1.0)
+	t.set_stylebox("pressed", "Button", btn_p)
 	return t
+
+func _build_loading_screen() -> void:
+	loading_layer = CanvasLayer.new()
+	loading_layer.layer = 15
+	add_child(loading_layer)
+
+	var bg := ColorRect.new()
+	bg.color = BG_COLOR
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
+	loading_layer.add_child(bg)
+
+	var theme := _create_theme()
+
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.theme = theme
+	loading_layer.add_child(root)
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	vbox.offset_left = -220; vbox.offset_right = 220
+	vbox.offset_top = -180; vbox.offset_bottom = 180
+	vbox.add_theme_constant_override("separation", 10)
+	root.add_child(vbox)
+
+	# Album art
+	var art_texture := _load_album_art_for_loading()
+	if art_texture:
+		var art_rect := TextureRect.new()
+		art_rect.texture = art_texture
+		art_rect.custom_minimum_size = Vector2(130, 130)
+		art_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		art_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		art_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox.add_child(art_rect)
+	else:
+		var art_panel := PanelContainer.new()
+		var art_style := StyleBoxFlat.new()
+		art_style.bg_color = Color(0.12, 0.12, 0.16)
+		art_style.set_corner_radius_all(14)
+		art_panel.add_theme_stylebox_override("panel", art_style)
+		art_panel.custom_minimum_size = Vector2(130, 130)
+		art_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox.add_child(art_panel)
+		var art_icon := Label.new()
+		art_icon.text = "♪"
+		art_icon.add_theme_font_size_override("font_size", 56)
+		art_icon.add_theme_color_override("font_color", Color(0.35, 0.35, 0.45))
+		art_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		art_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		art_panel.add_child(art_icon)
+
+	# Song title
+	var parsed := _parse_loading_song_name()
+	loading_song_label = Label.new()
+	loading_song_label.text = parsed["title"]
+	loading_song_label.add_theme_font_size_override("font_size", 30)
+	loading_song_label.add_theme_color_override("font_color", Color(0.95, 0.95, 1.0))
+	loading_song_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading_song_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	var font_bold := load("res://fonts/Inter-Bold.ttf") as Font
+	if font_bold:
+		loading_song_label.add_theme_font_override("font", font_bold)
+	vbox.add_child(loading_song_label)
+
+	# Artist
+	loading_artist_label = Label.new()
+	loading_artist_label.text = parsed["artist"]
+	loading_artist_label.add_theme_font_size_override("font_size", 20)
+	loading_artist_label.add_theme_color_override("font_color", Color(0.55, 0.55, 0.6))
+	loading_artist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading_artist_label.visible = parsed["artist"] != ""
+	vbox.add_child(loading_artist_label)
+
+	# Info line: instrument + difficulty + preset
+	var inst_display: String = ChartParserScript.INSTRUMENT_DISPLAY.get(song_instrument, song_instrument)
+	loading_info_label = Label.new()
+	loading_info_label.text = "%s  •  %s  •  %s" % [inst_display, song_difficulty, song_preset]
+	loading_info_label.add_theme_font_size_override("font_size", 17)
+	loading_info_label.add_theme_color_override("font_color", Color(0.4, 0.55, 0.9))
+	loading_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(loading_info_label)
+
+	# Spacer
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 16)
+	vbox.add_child(spacer)
+
+	# Status text
+	loading_status_label = Label.new()
+	loading_status_label.text = ""
+	loading_status_label.add_theme_font_size_override("font_size", 22)
+	loading_status_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	loading_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(loading_status_label)
+
+	# Progress bar
+	loading_bar = ProgressBar.new()
+	loading_bar.show_percentage = false
+	loading_bar.max_value = 100
+	loading_bar.custom_minimum_size = Vector2(0, 8)
+	loading_bar.visible = false
+
+	var bar_style := StyleBoxFlat.new()
+	bar_style.bg_color = Color(0.12, 0.12, 0.16)
+	bar_style.set_corner_radius_all(4)
+	loading_bar.add_theme_stylebox_override("background", bar_style)
+	var bar_fill := StyleBoxFlat.new()
+	bar_fill.bg_color = Color(0.3, 0.55, 1.0)
+	bar_fill.set_corner_radius_all(4)
+	loading_bar.add_theme_stylebox_override("fill", bar_fill)
+	vbox.add_child(loading_bar)
+
+	# Back button on loading screen
+	var loading_back := Button.new()
+	loading_back.text = "< Geri"
+	loading_back.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	loading_back.offset_left = 12; loading_back.offset_top = 10
+	loading_back.size = Vector2(80, 36)
+	loading_back.add_theme_font_size_override("font_size", 16)
+	loading_back.pressed.connect(_on_loading_back)
+	root.add_child(loading_back)
+
+func _on_loading_back() -> void:
+	# Cancel any in-progress decode
+	if OS.has_feature("android") and Engine.has_singleton("NativeAudioDecoder"):
+		var plugin = Engine.get_singleton("NativeAudioDecoder")
+		plugin.call("cancelDecode")
+	is_loading = false
+	get_tree().change_scene_to_file("res://scenes/menu.tscn")
+
+func _parse_loading_song_name() -> Dictionary:
+	var name := song_source.get_file()
+	for ext in [".sng", ".chart", ".mid"]:
+		if name.to_lower().ends_with(ext):
+			name = name.substr(0, name.length() - ext.length())
+	var paren := name.rfind("(")
+	if paren > 0:
+		name = name.substr(0, paren).strip_edges()
+	var sep := name.find(" - ")
+	if sep > 0:
+		return {"artist": name.substr(0, sep).strip_edges(), "title": name.substr(sep + 3).strip_edges()}
+	return {"artist": "", "title": name}
+
+func _load_album_art_for_loading() -> ImageTexture:
+	var source := song_source
+	if source.ends_with(".sng"):
+		var loader = SngLoaderScript.new()
+		if loader.load_sng(source):
+			var art_data := loader.get_album_art_data()
+			if art_data.size() > 0:
+				return _image_from_bytes(art_data)
+	else:
+		var dir_path := source.get_base_dir()
+		for fname in ["album.jpg", "album.png", "cover.jpg", "cover.png"]:
+			var art_path := dir_path.path_join(fname)
+			if FileAccess.file_exists(art_path):
+				var f := FileAccess.open(art_path, FileAccess.READ)
+				if f:
+					var data := f.get_buffer(f.get_length())
+					f.close()
+					return _image_from_bytes(data)
+	return null
+
+func _image_from_bytes(data: PackedByteArray) -> ImageTexture:
+	var img := Image.new()
+	if img.load_jpg_from_buffer(data) == OK:
+		pass
+	elif img.load_png_from_buffer(data) == OK:
+		pass
+	else:
+		return null
+	if img.get_width() > 256 or img.get_height() > 256:
+		img.resize(256, 256, Image.INTERPOLATE_LANCZOS)
+	return ImageTexture.create_from_image(img)
+
+func _hide_loading_screen() -> void:
+	if loading_layer:
+		var tw := create_tween()
+		tw.tween_property(loading_layer, "layer", 15, 0.0)  # keep layer during fade
+		# Fade out the first child (ColorRect bg)
+		var bg := loading_layer.get_child(0)
+		var root := loading_layer.get_child(1)
+		tw.tween_property(bg, "modulate:a", 0.0, 0.3)
+		tw.parallel().tween_property(root, "modulate:a", 0.0, 0.3)
+		tw.tween_callback(func():
+			if loading_layer:
+				loading_layer.queue_free()
+				loading_layer = null
+		)
 
 # --- Song loading ---
 
 func _load_song() -> void:
+	is_loading = true
+	loading_status = "Chart yukleniyor"
 	var source := song_source if song_source != "" else "res://notes.chart"
 	var difficulty := song_difficulty if song_difficulty != "" else "Expert"
 	var sng_loader: RefCounted = null
@@ -288,28 +621,28 @@ func _load_song() -> void:
 		if sng_loader.has_chart():
 			var parser = ChartParserScript.new()
 			var chart_text: String = sng_loader.get_chart_text()
-			parse_ok = parser.parse_text(chart_text, difficulty)
+			parse_ok = parser.parse_text(chart_text, difficulty, song_instrument)
 			if parse_ok:
 				parsed_notes = parser.notes
 				parsed_lyrics = parser.lyric_phrases
 				parsed_resolution = parser.resolution
 				chart_offset_sec = parser.audio_offset_sec
-				print("Game: parsed .chart from .sng")
+				print("Game: parsed .chart from .sng (instrument=%s)" % song_instrument)
 		if not parse_ok and sng_loader.has_midi():
 			var midi_parser = MidiParserScript.new()
 			var midi_data: PackedByteArray = sng_loader.get_midi_data()
-			parse_ok = midi_parser.parse_data(midi_data, difficulty)
+			parse_ok = midi_parser.parse_data(midi_data, difficulty, song_instrument)
 			if parse_ok:
 				parsed_notes = midi_parser.notes
 				parsed_lyrics = midi_parser.lyric_phrases
 				parsed_resolution = midi_parser.resolution
-				print("Game: parsed .mid from .sng")
+				print("Game: parsed .mid from .sng (instrument=%s)" % song_instrument)
 		if not parse_ok:
 			push_error("Game: no chart or midi in .sng"); return
 
 	elif source.ends_with(".chart"):
 		var parser = ChartParserScript.new()
-		parse_ok = parser.parse_file(source, difficulty)
+		parse_ok = parser.parse_file(source, difficulty, song_instrument)
 		if not parse_ok:
 			push_error("Game: failed to parse .chart"); return
 		parsed_notes = parser.notes
@@ -319,12 +652,46 @@ func _load_song() -> void:
 
 	elif source.ends_with(".mid"):
 		var midi_parser = MidiParserScript.new()
-		parse_ok = midi_parser.parse_file(source, difficulty)
+		parse_ok = midi_parser.parse_file(source, difficulty, song_instrument)
 		if not parse_ok:
 			push_error("Game: failed to parse .mid"); return
 		parsed_notes = midi_parser.notes
 		parsed_lyrics = midi_parser.lyric_phrases
 		parsed_resolution = midi_parser.resolution
+
+	elif _is_stfs_source(source):
+		# Direct CON/LIVE loading
+		var stfs := StfsParserScript.new()
+		if not stfs.load_stfs(source):
+			push_error("Game: failed to parse CON/LIVE"); return
+		var midi_data := stfs.get_midi_data()
+		if midi_data.is_empty():
+			push_error("Game: no MIDI in CON"); return
+		var midi_parser = MidiParserScript.new()
+		parse_ok = midi_parser.parse_data(midi_data, difficulty, song_instrument)
+		if not parse_ok:
+			push_error("Game: failed to parse MIDI from CON"); return
+		parsed_notes = midi_parser.notes
+		parsed_lyrics = midi_parser.lyric_phrases
+		parsed_resolution = midi_parser.resolution
+		# Extract MOGG→OGG to temp dir for audio
+		var mogg_data := stfs.get_mogg_data()
+		if mogg_data.size() > 0:
+			var tmp_dir := "user://sng_temp"
+			_clear_dir(tmp_dir)
+			DirAccess.make_dir_recursive_absolute(tmp_dir)
+			var mogg := MoggHandlerScript.new()
+			mogg.save_ogg_to_file(mogg_data, tmp_dir.path_join("song.ogg"))
+			# Also save album art if available
+			var art := stfs.get_album_art_data()
+			if art.size() > 0:
+				var art_ext := ".png"
+				if art.size() >= 2 and art[0] == 0xFF and art[1] == 0xD8:
+					art_ext = ".jpg"
+				var af := FileAccess.open(tmp_dir.path_join("album" + art_ext), FileAccess.WRITE)
+				if af:
+					af.store_buffer(art)
+					af.close()
 
 	else:
 		push_error("Game: unknown file type: %s" % source); return
@@ -343,44 +710,118 @@ func _load_song() -> void:
 
 	if song_mode == "piano":
 		_merge_piano_lanes()
+		# Tiles mode: ensure no simultaneous notes after piano merge
+		if song_preset == "Tiles":
+			_dedup_simultaneous()
 
 	note_state.resize(notes.size())
 	note_state.fill(0)
 	first_visible_idx = 0
 	current_phrase_idx = 0
+	total_notes = notes.size()
+	hit_count = 0
+	miss_count = 0
 
-	print("Game: [%s][%s] %d notes, %d phrases" % [song_mode, difficulty, notes.size(), lyric_phrases.size()])
+	print("Game: [%s][%s][%s] %d notes, %d phrases" % [song_instrument, song_mode, difficulty, notes.size(), lyric_phrases.size()])
 
 	is_loading = true
-	loading_status = "Ses hazirlaniyor..."
-	if sng_loader:
+	loading_status = "Ses hazirlaniyor"
+	if _is_stfs_source(source):
+		# CON: audio already extracted to user://sng_temp
+		_prepare_audio("user://sng_temp")
+	elif sng_loader:
 		var tmp_dir := "user://sng_temp"
 		_clear_dir(tmp_dir)
 		sng_loader.extract_to_dir(tmp_dir)
 		_prepare_audio(tmp_dir)
 	else:
-		_prepare_audio(source.get_base_dir())
+		var audio_dir := source.get_base_dir()
+		# On Android, res:// files are inside APK — copy to user:// for MediaCodec access.
+		if OS.has_feature("android") and audio_dir.begins_with("res://"):
+			var tmp_dir := "user://sng_temp"
+			_clear_dir(tmp_dir)
+			DirAccess.make_dir_recursive_absolute(tmp_dir)
+			var dir := DirAccess.open(audio_dir)
+			if dir:
+				dir.list_dir_begin()
+				var fname := dir.get_next()
+				while fname != "":
+					if not dir.current_is_dir():
+						var fl := fname.to_lower()
+						if fl.ends_with(".opus") or fl.ends_with(".ogg") or fl.ends_with(".mp3") or fl.ends_with(".wav"):
+							var src_file := FileAccess.open(audio_dir.path_join(fname), FileAccess.READ)
+							if src_file:
+								var dst_file := FileAccess.open(tmp_dir.path_join(fname), FileAccess.WRITE)
+								if dst_file:
+									dst_file.store_buffer(src_file.get_buffer(src_file.get_length()))
+									dst_file.close()
+								src_file.close()
+					fname = dir.get_next()
+				dir.list_dir_end()
+			_prepare_audio(tmp_dir)
+		else:
+			_prepare_audio(audio_dir)
 
 func _merge_piano_lanes() -> void:
-	var time_set := {}
+	# Build occupied set: time_key -> set of occupied lanes
+	var occupied := {}  # "time_key" -> Dictionary{lane: true}
 	for n in notes:
-		if int(n["lane"]) == 3:
-			time_set["%.1f" % float(n["time_ms"])] = true
+		if int(n["lane"]) <= 3:
+			var key := "%.1f" % float(n["time_ms"])
+			if not occupied.has(key):
+				occupied[key] = {}
+			occupied[key][int(n["lane"])] = true
+
 	var merged: Array = []
 	for n in notes:
 		if int(n["lane"]) == 4:
 			var key := "%.1f" % float(n["time_ms"])
-			if time_set.has(key):
-				continue
-			n["lane"] = 3
-			time_set[key] = true
+			if not occupied.has(key):
+				occupied[key] = {}
+			# Try lane 3 first, then nearest free lane
+			var placed := false
+			for try_lane in [3, 2, 1, 0]:
+				if not occupied[key].has(try_lane):
+					n["lane"] = try_lane
+					occupied[key][try_lane] = true
+					placed = true
+					break
+			if not placed:
+				continue  # all 4 lanes full — drop note
 		merged.append(n)
 	notes = merged
+
+func _dedup_simultaneous() -> void:
+	# Keep only one note per timestamp (Tiles mode — no chords)
+	var result: Array = []
+	var last_time := -1.0
+	for n in notes:
+		var t: float = n["time_ms"]
+		if absf(t - last_time) < 1.0:
+			continue  # skip simultaneous
+		result.append(n)
+		last_time = t
+	var removed := notes.size() - result.size()
+	if removed > 0:
+		print("Tiles: dedup removed %d simultaneous notes" % removed)
+	notes = result
 
 # --- Audio decode pipeline ---
 
 func _prepare_audio(dir_path: String) -> void:
 	print("Audio: scanning stems in %s" % dir_path)
+
+	# Check cache first
+	var cache_key := song_source.md5_text()
+	var cache_ext := "_mixed.wav" if OS.has_feature("android") else "_mixed.ogg"
+	var cached_path := MIX_CACHE_DIR.path_join(cache_key + cache_ext)
+	if FileAccess.file_exists(cached_path):
+		print("Audio: found cached mix — %s" % cached_path)
+		var stream := _load_cached(cached_path)
+		if stream:
+			_setup_single_player(stream)
+			return
+		push_error("Audio: cached file failed to load, re-processing")
 
 	# List all audio files
 	var all_audio: Array[String] = []
@@ -391,232 +832,196 @@ func _prepare_audio(dir_path: String) -> void:
 		while fname != "":
 			if not dir.current_is_dir():
 				var fl := fname.to_lower()
-				if fl.ends_with(".opus") or fl.ends_with(".ogg") or fl.ends_with(".mp3"):
+				if fl.ends_with(".opus") or fl.ends_with(".ogg") or fl.ends_with(".mp3") or fl.ends_with(".wav"):
 					all_audio.append(fname)
 			fname = dir.get_next()
 		dir.list_dir_end()
 	print("Audio: found files: %s" % str(all_audio))
 
-	# Categorize: song.*, preview.*, stems
-	var song_files: Array[String] = []
-	var stem_files: Array[String] = []
+	# Categorize: song.*, preview.*, stems — skip preview
+	var all_playable: Array[String] = []
 	for af: String in all_audio:
 		var base := af.get_basename().to_lower()
-		if base == "preview":
-			print("Audio: skipping preview: %s" % af)
-			continue
-		if base == "song":
-			song_files.append(af)
-		else:
-			stem_files.append(af)
+		if base != "preview":
+			all_playable.append(af)
 
-	# Determine which files to use
-	var to_load: Array[String] = []
-	if stem_files.size() >= 2:
-		to_load = stem_files
-		print("Audio: STEM MODE — %d stems, skipping song.*" % stem_files.size())
-	elif song_files.size() > 0:
-		to_load.append(song_files[0])
-		print("Audio: SONG MODE — %s" % song_files[0])
-	elif stem_files.size() == 1:
-		to_load.append(stem_files[0])
-		print("Audio: SINGLE STEM — %s" % stem_files[0])
-	elif all_audio.size() > 0:
-		to_load.append(all_audio[0])
-		print("Audio: FALLBACK — %s" % all_audio[0])
+	if all_playable.is_empty() and all_audio.size() > 0:
+		all_playable.append(all_audio[0])
 
-	if to_load.is_empty():
+	if all_playable.is_empty():
 		_show_audio_error("Ses dosyasi bulunamadi!")
 		is_loading = false
 		return
 
-	# Build cache key from file names + dir
-	var cache_key := dir_path
-	for f2: String in to_load:
-		cache_key += "|" + f2
-	_cache_path = "user://cache/" + cache_key.md5_text() + ".pcm"
+	# Build full paths
+	var mix_paths: Array[String] = []
+	for af in all_playable:
+		mix_paths.append(dir_path.path_join(af))
 
-	# Try cache
-	var cached := _load_from_cache()
-	if cached:
-		_setup_final_player(cached)
-		return
+	print("Audio: MIX — %d file(s): %s" % [all_playable.size(), str(all_playable)])
 
-	# No cache — load streams and start decode via AudioEffectCapture
-	var streams: Array = []
-	for i in range(to_load.size()):
-		var stem_fname: String = to_load[i]
-		loading_status = "Kanal yukleniyor %s (%d/%d)..." % [stem_fname, i + 1, to_load.size()]
-		var stream = _load_audio_stream(dir_path.path_join(stem_fname))
-		if stream:
-			streams.append({"name": stem_fname, "stream": stream})
+	DirAccess.make_dir_recursive_absolute(MIX_CACHE_DIR)
 
-	if streams.is_empty():
-		_show_audio_error("Hicbir ses dosyasi yuklenemedi!")
-		is_loading = false
-		return
+	# Build OS-level paths for native tools
+	var os_inputs: Array[String] = []
+	for sp in mix_paths:
+		os_inputs.append(ProjectSettings.globalize_path(sp))
+	var os_output := ProjectSettings.globalize_path(cached_path)
 
-	# Set up decode bus (silent, with capture)
-	_decode_bus_idx = AudioServer.bus_count
-	AudioServer.set_bus_count(_decode_bus_idx + 1)
-	AudioServer.set_bus_name(_decode_bus_idx, "Decode")
-	AudioServer.set_bus_volume_db(_decode_bus_idx, -80.0)
-	_decode_capture = AudioEffectCapture.new()
-	_decode_capture.buffer_length = 2.0
-	AudioServer.add_bus_effect(_decode_bus_idx, _decode_capture)
+	loading_status = "Ses hazırlanıyor"
+	print("Audio: processing %d file(s) → %s" % [mix_paths.size(), cached_path])
 
-	# Play all stems on decode bus simultaneously
-	_decode_players.clear()
-	_decode_pcm.clear()
-	_decode_longest_sec = 0.0
-	_decode_start_ms = Time.get_ticks_msec()
+	if OS.has_feature("android"):
+		# Async path — signals will handle completion
+		_pending_cached_path = cached_path
+		_decode_android_async(os_inputs, os_output)
+	else:
+		# Sync path — ffmpeg on desktop
+		var success := _ffmpeg_desktop(os_inputs, os_output)
+		if not success or not FileAccess.file_exists(cached_path):
+			if FileAccess.file_exists(cached_path):
+				DirAccess.remove_absolute(cached_path)
+			_show_audio_error("Ses işlenemedi!")
+			is_loading = false
+			return
+		print("Audio: processing complete — %s" % cached_path)
+		loading_status = "Ses yükleniyor"
+		var stream := _load_cached(cached_path)
+		if stream == null:
+			_show_audio_error("Ses dosyasi yüklenemedi!")
+			is_loading = false
+			return
+		_setup_single_player(stream)
 
-	for s in streams:
-		var player := AudioStreamPlayer.new()
-		player.stream = s["stream"]
-		player.bus = "Decode"
-		add_child(player)
-		_decode_players.append(player)
-		var length: float = s["stream"].get_length() if s["stream"].has_method("get_length") else 0.0
-		if length > _decode_longest_sec:
-			_decode_longest_sec = length
-		player.play()
-		print("Decode: started '%s' on Decode bus (length=%.1fs)" % [s["name"], length])
+func _load_cached(path: String) -> AudioStream:
+	if path.ends_with(".wav"):
+		return _load_wav_file(path)
+	return AudioStreamOggVorbis.load_from_file(path)
 
-	print("Decode: %d stems decoding, estimated %.0fs" % [_decode_players.size(), _decode_longest_sec])
-	loading_status = "Ses cozuluyor... 0%%"
-
-
-func _decode_step() -> void:
-	# Pull captured frames
-	var available := _decode_capture.get_frames_available()
-	if available > 0:
-		var frames := _decode_capture.get_buffer(available)
-		_decode_pcm.append_array(frames)
-
-	# Check progress
-	var all_done := true
-	var max_pos := 0.0
-	for p in _decode_players:
-		if p.playing:
-			all_done = false
-			max_pos = maxf(max_pos, p.get_playback_position())
-		else:
-			max_pos = maxf(max_pos, _decode_longest_sec)
-
-	if _decode_longest_sec > 0:
-		var pct := clampf(max_pos / _decode_longest_sec * 100.0, 0.0, 100.0)
-		loading_status = "Ses cozuluyor... %d%%" % int(pct)
-
-	if all_done:
-		# Grab any remaining frames
-		available = _decode_capture.get_frames_available()
-		if available > 0:
-			_decode_pcm.append_array(_decode_capture.get_buffer(available))
-		_finalize_decode()
-
-func _finalize_decode() -> void:
-	var decode_ms := Time.get_ticks_msec() - _decode_start_ms
-	var frame_count := _decode_pcm.size()
-	print("Decode: captured %d frames (%.1f sec) in %dms" % [
-		frame_count, float(frame_count) / 48000.0, decode_ms])
-
-	# Clean up decode players and bus
-	for p in _decode_players:
-		p.stop()
-		p.queue_free()
-	_decode_players.clear()
-	if _decode_bus_idx >= 0:
-		AudioServer.remove_bus(_decode_bus_idx)
-		_decode_bus_idx = -1
-	_decode_capture = null
-
-	if frame_count == 0:
-		_show_audio_error("Ses cozulemedi — bos PCM!")
-		is_loading = false
-		return
-
-	loading_status = "Ses birlestiriliyor..."
-
-	# Find peak for normalization (only scale down if clipping)
-	var peak: float = 0.001
-	for i in range(frame_count):
-		peak = maxf(peak, absf(_decode_pcm[i].x))
-		peak = maxf(peak, absf(_decode_pcm[i].y))
-	var gain := 1.0 / peak if peak > 1.0 else 1.0
-	print("Decode: peak=%.3f gain=%.3f" % [peak, gain])
-
-	# Convert to 16-bit stereo PCM
-	var wav_data := PackedByteArray()
-	wav_data.resize(frame_count * 4)
-	for i in range(frame_count):
-		var l := clampi(int(_decode_pcm[i].x * gain * 32767.0), -32768, 32767)
-		var r := clampi(int(_decode_pcm[i].y * gain * 32767.0), -32768, 32767)
-		wav_data.encode_s16(i * 4, l)
-		wav_data.encode_s16(i * 4 + 2, r)
-	_decode_pcm.clear()
-
-	var wav := AudioStreamWAV.new()
-	wav.format = AudioStreamWAV.FORMAT_16_BITS
-	wav.stereo = true
-	wav.mix_rate = 48000
-	wav.data = wav_data
-
-	# Save to cache
-	_save_to_cache(wav_data)
-
-	_setup_final_player(wav)
-
-func _setup_final_player(wav: AudioStreamWAV) -> void:
+func _setup_single_player(stream: AudioStream) -> void:
 	var player := AudioStreamPlayer.new()
-	player.stream = wav
+	player.stream = stream
 	add_child(player)
-	audio_players.clear()
 	audio_players.append(player)
 	master_player = player
-	print("Audio: SINGLE player ready — WAV %d frames, %.1fs, 1 player" % [
-		wav.data.size() / 4, float(wav.data.size() / 4) / 48000.0])
-
+	print("Audio: 1 player ready")
 	is_loading = false
 	_countdown = 3.0
 
-func _save_to_cache(wav_data: PackedByteArray) -> void:
-	DirAccess.make_dir_recursive_absolute("user://cache")
-	var f := FileAccess.open(_cache_path, FileAccess.WRITE)
-	if f:
-		f.store_32(48000)
-		f.store_32(wav_data.size())
-		f.store_buffer(wav_data)
-		f.close()
-		print("Cache: SAVED %s (%d bytes, %.1f MB)" % [
-			_cache_path, wav_data.size(), float(wav_data.size()) / 1048576.0])
-	else:
-		push_error("Cache: failed to save %s" % _cache_path)
 
-func _load_from_cache() -> AudioStreamWAV:
-	var f := FileAccess.open(_cache_path, FileAccess.READ)
-	if f == null:
-		print("Cache: MISS %s" % _cache_path)
-		return null
-	var mix_rate_val := f.get_32()
-	var data_size := f.get_32()
-	if data_size == 0 or data_size > 200_000_000:
-		f.close()
-		print("Cache: CORRUPT (size=%d) %s" % [data_size, _cache_path])
-		return null
-	var wav_data := f.get_buffer(data_size)
+func _decode_android_async(inputs: Array[String], output: String) -> void:
+	if not Engine.has_singleton("NativeAudioDecoder"):
+		push_error("Audio: NativeAudioDecoder singleton not found!")
+		_show_audio_error("NativeAudioDecoder bulunamadı!")
+		is_loading = false
+		return
+	_decode_plugin = Engine.get_singleton("NativeAudioDecoder")
+	_pending_cached_path = output
+
+	# Connect signals (one-shot)
+	if not _decode_plugin.is_connected("decode_progress", _on_decode_progress):
+		_decode_plugin.connect("decode_progress", _on_decode_progress)
+	if not _decode_plugin.is_connected("decode_done", _on_decode_done):
+		_decode_plugin.connect("decode_done", _on_decode_done)
+	if not _decode_plugin.is_connected("decode_failed", _on_decode_failed):
+		_decode_plugin.connect("decode_failed", _on_decode_failed)
+
+	_decode_plugin.call("decodeAndMix", inputs, output)
+
+func _on_decode_progress(pct: int, stage: String) -> void:
+	loading_progress = pct
+	loading_status = stage
+
+func _on_decode_done(wav_path: String) -> void:
+	print("Audio: decode_done — %s" % wav_path)
+	# Convert globalized path back to user:// path
+	var cached_path := _pending_cached_path
+	if not FileAccess.file_exists(cached_path):
+		# Try the raw path
+		cached_path = wav_path
+	loading_status = "Ses yükleniyor"
+	loading_progress = 95
+	var stream := _load_cached(cached_path)
+	if stream == null:
+		_show_audio_error("Ses dosyasi yüklenemedi!")
+		is_loading = false
+		return
+	_setup_single_player(stream)
+
+func _on_decode_failed(error: String) -> void:
+	push_error("Audio: NativeAudioDecoder failed — %s" % error)
+	if error == "Cancelled":
+		return  # User navigated away, don't show error
+	_show_audio_error("Ses işlenemedi!")
+	is_loading = false
+
+func _ffmpeg_desktop(inputs: Array[String], output: String) -> bool:
+	var args: Array = ["-hide_banner"]
+	for inp in inputs:
+		args.append("-i")
+		args.append(inp)
+	if inputs.size() == 1:
+		var ch_count := _ffprobe_channel_count(inputs[0])
+		if ch_count > 2:
+			# Multi-channel (MOGG): explicit pan filter mixing even→L, odd→R
+			var left := ""
+			var right := ""
+			var scale := "%.4f" % (1.0 / ((ch_count + 1) / 2))
+			for c in range(ch_count):
+				var term := "%s*c%d" % [scale, c]
+				if c % 2 == 0:
+					left += ("+" if left != "" else "") + term
+				else:
+					right += ("+" if right != "" else "") + term
+			if right == "":
+				right = left
+			var pan_filter := "pan=stereo|c0=%s|c1=%s" % [left, right]
+			print("Audio: pan filter = %s" % pan_filter)
+			args.append_array(["-af", pan_filter, "-c:a", "libvorbis", "-q:a", "6"])
+		else:
+			args.append_array(["-ac", "2", "-c:a", "libvorbis", "-q:a", "6"])
+	else:
+		args.append_array(["-filter_complex",
+			"amix=inputs=%d:duration=longest:normalize=0" % inputs.size(),
+			"-ac", "2", "-c:a", "libvorbis", "-q:a", "6"])
+	args.append_array(["-y", output])
+
+	print("Audio: ffmpeg %s" % str(args))
+	var cmd_output: Array = []
+	var code := OS.execute("ffmpeg", args, cmd_output, true)
+	if code != 0:
+		print("Audio: ffmpeg failed (exit %d)" % code)
+		for line in cmd_output:
+			print("  ffmpeg: %s" % str(line))
+		return false
+	return true
+
+func _ffprobe_channel_count(path: String) -> int:
+	var probe_output: Array = []
+	var code := OS.execute("ffprobe", [
+		"-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=channels",
+		"-of", "csv=p=0", path
+	], probe_output, true)
+	if code != 0 or probe_output.is_empty():
+		return 2
+	var text: String = probe_output[0] if probe_output.size() > 0 else "2"
+	var count := int(text.strip_edges())
+	print("Audio: ffprobe found %d channels in %s" % [count, path.get_file()])
+	return maxi(count, 1)
+
+func _is_stfs_source(path: String) -> bool:
+	var fl := path.to_lower()
+	if fl.ends_with(".con") or fl.ends_with(".live"):
+		return true
+	# Check magic bytes for extensionless files (rb3con etc.)
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null or f.get_length() < 4:
+		if f: f.close()
+		return false
+	var magic := f.get_buffer(4).get_string_from_ascii()
 	f.close()
-	if wav_data.size() != data_size:
-		print("Cache: TRUNCATED %s" % _cache_path)
-		return null
-	var wav := AudioStreamWAV.new()
-	wav.format = AudioStreamWAV.FORMAT_16_BITS
-	wav.stereo = true
-	wav.mix_rate = mix_rate_val
-	wav.data = wav_data
-	print("Cache: HIT %s (%d bytes, %.1f MB)" % [
-		_cache_path, data_size, float(data_size) / 1048576.0])
-	return wav
+	return magic == "CON " or magic == "LIVE" or magic == "PIRS"
 
 func _clear_dir(path: String) -> void:
 	var dir := DirAccess.open(path)
@@ -629,113 +1034,39 @@ func _clear_dir(path: String) -> void:
 		fname = dir.get_next()
 	dir.list_dir_end()
 
-func _load_audio_stream(path: String) -> AudioStream:
-	var fname := path.get_file()
-	var ext := fname.get_extension().to_lower()
-	var loader_name := ""
-	var start_ms := Time.get_ticks_msec()
-	var stream: AudioStream = null
-	var mix_rate := AudioServer.get_mix_rate()
-
-	if ext == "ogg":
-		# Check for opus-inside-ogg via magic bytes
-		var probe := FileAccess.open(path, FileAccess.READ)
-		if probe:
-			var header := probe.get_buffer(mini(40, probe.get_length()))
-			probe.close()
-			var has_opus_head := false
-			for i in range(header.size() - 7):
-				if header[i] == 0x4F and header[i+1] == 0x70 and header[i+2] == 0x75 and header[i+3] == 0x73 \
-					and header[i+4] == 0x48 and header[i+5] == 0x65 and header[i+6] == 0x61 and header[i+7] == 0x64:
-					has_opus_head = true
-					break
-			if has_opus_head:
-				print("Audio: [%s] OGG container contains Opus data — routing to opus loader" % fname)
-				stream = _load_opus_stream(path)
-				loader_name = "opus (ogg container)"
-				var elapsed := Time.get_ticks_msec() - start_ms
-				_log_audio_load(fname, ext, loader_name, mix_rate, stream, elapsed)
-				return stream
-
-		loader_name = "native OggVorbis"
-		stream = AudioStreamOggVorbis.load_from_file(path)
-		if stream == null:
-			var err_msg := "Audio: OGG load FAILED: %s" % path
-			push_error(err_msg)
-			_show_audio_error(err_msg)
-	elif ext == "mp3":
-		loader_name = "native MP3"
-		var f := FileAccess.open(path, FileAccess.READ)
-		if f:
-			var mp3 := AudioStreamMP3.new()
-			mp3.data = f.get_buffer(f.get_length())
-			f.close()
-			stream = mp3
-		else:
-			var err_msg := "Audio: MP3 open FAILED: %s" % path
-			push_error(err_msg)
-			_show_audio_error(err_msg)
-	elif ext == "opus":
-		loader_name = "audio-stream-plus (opus)"
-		stream = _load_opus_stream(path)
-	else:
-		var err_msg := "Audio: unsupported format '.%s': %s" % [ext, path]
-		push_error(err_msg)
-		_show_audio_error(err_msg)
-		return null
-
-	var elapsed := Time.get_ticks_msec() - start_ms
-	_log_audio_load(fname, ext, loader_name, mix_rate, stream, elapsed)
-	return stream
-
-func _load_opus_stream(path: String) -> AudioStream:
+func _load_wav_file(path: String) -> AudioStream:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
-		var err_msg := "Audio: cannot open opus file: %s" % path
-		push_error(err_msg)
-		_show_audio_error(err_msg)
+		push_error("Audio: cannot open WAV: %s" % path)
 		return null
 	var data := f.get_buffer(f.get_length())
 	f.close()
-	if not ClassDB.class_exists("AudioStreamOpus"):
-		var err_msg := "Audio: AudioStreamOpus class not found — GDExtension not loaded!"
-		push_error(err_msg)
-		_show_audio_error(err_msg)
+	if data.size() < 44:
+		push_error("Audio: WAV too small: %s" % path)
 		return null
-	var opus_stream = ClassDB.instantiate("AudioStreamOpus")
-	if opus_stream == null:
-		var err_msg := "Audio: AudioStreamOpus instantiate failed"
-		push_error(err_msg)
-		_show_audio_error(err_msg)
-		return null
-	opus_stream.set("data", data)
-	return opus_stream
-
-func _log_audio_load(fname: String, ext: String, loader: String, mix_rate: float, stream: AudioStream, elapsed_ms: int) -> void:
-	if stream:
-		var sample_rate := "unknown"
-		var channels := "unknown"
-		if stream is AudioStreamOggVorbis:
-			sample_rate = "native"
-			channels = "native"
-		elif stream is AudioStreamMP3:
-			sample_rate = "native"
-			channels = "native"
-		elif stream is AudioStreamWAV:
-			sample_rate = str(int((stream as AudioStreamWAV).mix_rate))
-			channels = "stereo" if (stream as AudioStreamWAV).stereo else "mono"
-		else:
-			# AudioStreamOpus or other extension types
-			sample_rate = "48000 (opus default)"
-			channels = "stereo (opus default)"
-		print("Audio: LOADED [%s] ext=%s loader=%s sample_rate=%s channels=%s project_mix_rate=%d elapsed=%dms" % [
-			fname, ext, loader, sample_rate, channels, int(mix_rate), elapsed_ms])
-	else:
-		var err_msg := "Audio: FAILED [%s] ext=%s loader=%s elapsed=%dms" % [fname, ext, loader, elapsed_ms]
-		push_error(err_msg)
-		_show_audio_error(err_msg)
+	var channels := data.decode_u16(22)
+	var sample_rate := data.decode_u32(24)
+	var bits := data.decode_u16(34)
+	var data_offset := 44
+	for i in range(36, mini(data.size() - 8, 200)):
+		if data[i] == 0x64 and data[i+1] == 0x61 and data[i+2] == 0x74 and data[i+3] == 0x61:
+			data_offset = i + 8
+			break
+	var pcm_data := data.slice(data_offset)
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS if bits == 16 else AudioStreamWAV.FORMAT_8_BITS
+	wav.mix_rate = sample_rate
+	wav.stereo = (channels == 2)
+	wav.data = pcm_data
+	print("Audio: WAV loaded — %d ch, %d Hz, %d bytes" % [channels, sample_rate, pcm_data.size()])
+	return wav
 
 func _show_audio_error(msg: String) -> void:
+	if loading_status_label:
+		loading_status_label.text = msg
+		loading_status_label.add_theme_color_override("font_color", Color(1, 0.3, 0.2))
+	if loading_bar:
+		loading_bar.visible = false
 	if warning_label:
 		warning_label.text = msg
 		warning_label.visible = true
@@ -748,9 +1079,10 @@ func _start_playback() -> void:
 	_hit_log_count = 0
 	_start_ticks = Time.get_ticks_msec()
 	_play_call_time_ms = _start_ticks
-	master_player.play()
-	print("Sync: play() at ticks=%d, 1 player, chart_offset=%.1fms" % [
-		_play_call_time_ms, _chart_offset_ms])
+	for player in audio_players:
+		player.play()
+	print("Sync: play() at ticks=%d, %d players, chart_offset=%.1fms" % [
+		_play_call_time_ms, audio_players.size(), _chart_offset_ms])
 
 func _get_song_time_ms() -> float:
 	if not master_player:
@@ -764,26 +1096,33 @@ func _get_song_time_ms() -> float:
 
 # --- Main loop ---
 
-func _process(_delta: float) -> void:
-	# State: decoding stems via AudioEffectCapture
+func _process(delta: float) -> void:
 	if is_loading:
-		if _decode_capture:
-			_decode_step()
-		loading_label.text = loading_status
+		if loading_status_label:
+			# Animated dots
+			loading_dots_timer += delta
+			var dots := ".".repeat(int(loading_dots_timer * 2.0) % 4)
+			loading_status_label.text = loading_status + dots
+		if loading_bar:
+			loading_bar.visible = loading_progress > 0
+			loading_bar.value = loading_progress
 		queue_redraw()
 		return
 
 	# State: countdown before play
 	if _countdown > 0:
-		_countdown -= _delta
-		loading_label.text = str(ceili(_countdown))
+		_countdown -= delta
+		if loading_status_label:
+			loading_status_label.text = str(ceili(_countdown))
+			loading_status_label.add_theme_font_size_override("font_size", 64)
+		if loading_bar:
+			loading_bar.visible = false
 		queue_redraw()
 		if _countdown <= 0:
-			loading_label.text = ""
+			_hide_loading_screen()
 			_start_playback()
 		return
 
-	loading_label.text = ""
 	if not song_started:
 		return
 
@@ -797,11 +1136,15 @@ func _process(_delta: float) -> void:
 		if note_state[idx] == 0 and song_time_ms - t > HIT_WINDOW_MS:
 			note_state[idx] = 2
 			combo = 0
+			_update_combo_tier()
+			miss_count += 1
+			_miss_flash_alpha = 1.0
+			_miss_lane_flashes.append({"lane": int(notes[idx]["lane"]), "alpha": 1.0})
 
 	# Advance first_visible_idx past notes way off-screen
 	while first_visible_idx < notes.size():
 		var t: float = notes[first_visible_idx]["time_ms"]
-		if song_time_ms - t < APPROACH_TIME_MS + HIT_LINGER_MS:
+		if song_time_ms - t < _approach_time_ms() + HIT_LINGER_MS:
 			break
 		first_visible_idx += 1
 
@@ -817,8 +1160,37 @@ func _process(_delta: float) -> void:
 		else:
 			i += 1
 
+	# Decay hit rings
+	i = 0
+	while i < hit_rings.size():
+		hit_rings[i]["radius"] = float(hit_rings[i]["radius"]) + delta * 300.0
+		hit_rings[i]["alpha"] = float(hit_rings[i]["alpha"]) - delta * 2.5
+		if float(hit_rings[i]["alpha"]) <= 0:
+			hit_rings.remove_at(i)
+		else:
+			i += 1
+
+	# Decay miss flash
+	if _miss_flash_alpha > 0:
+		_miss_flash_alpha = maxf(0, _miss_flash_alpha - delta * 3.0)
+
+	# Decay miss lane flashes
+	var i_mlf := 0
+	while i_mlf < _miss_lane_flashes.size():
+		_miss_lane_flashes[i_mlf]["alpha"] -= delta * 3.0
+		if _miss_lane_flashes[i_mlf]["alpha"] <= 0:
+			_miss_lane_flashes.remove_at(i_mlf)
+		else:
+			i_mlf += 1
+
 	_update_lyrics()
 	_update_hud()
+
+	# End of song detection
+	if master_player and not master_player.playing and song_time_ms > 1000:
+		_on_song_finished()
+		return
+
 	queue_redraw()
 
 func _update_sustains() -> void:
@@ -837,11 +1209,11 @@ func _update_sustains() -> void:
 			# Sustain completed
 			note_state[idx] = 1
 			held_sustain[lane] = -1
-			score += 25 * combo
+			score += int(25.0 * _combo_multiplier)
 
 func _update_lyrics() -> void:
 	if lyric_phrases.is_empty():
-		lyric_rtl.text = ""; return
+		lyric_panel.visible = false; return
 	while current_phrase_idx < lyric_phrases.size():
 		if float(lyric_phrases[current_phrase_idx]["end_ms"]) >= song_time_ms:
 			break
@@ -852,8 +1224,9 @@ func _update_lyrics() -> void:
 		var end: float = phrase["end_ms"]
 		if song_time_ms >= start - 300 and song_time_ms <= end:
 			lyric_rtl.text = _build_highlighted_bbcode(phrase)
+			lyric_panel.visible = true
 			return
-	lyric_rtl.text = ""
+	lyric_panel.visible = false
 
 func _build_highlighted_bbcode(phrase: Dictionary) -> String:
 	var full_text: String = phrase["text"]
@@ -870,11 +1243,37 @@ func _build_highlighted_bbcode(phrase: Dictionary) -> String:
 		full_text.substr(0, sung_end), full_text.substr(sung_end)]
 
 func _update_hud() -> void:
-	score_label.text = "Score: %d" % score
-	combo_label.text = "%d Combo" % combo if combo >= 2 else ""
+	score_label.text = str(score)
+	if combo >= 2:
+		var tier_txt := _get_combo_tier_label()
+		if tier_txt != "":
+			combo_label.text = "%d Combo  %s" % [combo, tier_txt]
+			combo_label.add_theme_color_override("font_color", _combo_glow_color.lightened(0.4))
+		else:
+			combo_label.text = "%d Combo" % combo
+			combo_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
+	else:
+		combo_label.text = ""
 	if notes.size() > 0:
 		var last_time: float = notes[notes.size() - 1]["time_ms"]
 		progress_bar.value = clampf(song_time_ms / last_time * 100.0, 0.0, 100.0)
+
+	# Rest timer — find next active note
+	var next_time := -1.0
+	for idx in range(first_visible_idx, notes.size()):
+		if note_state[idx] == 0:
+			next_time = float(notes[idx]["time_ms"])
+			break
+	if next_time > 0:
+		var gap := next_time - song_time_ms
+		if gap > 3000.0:
+			var secs := ceili(gap / 1000.0)
+			rest_timer_label.text = "%d" % secs
+			rest_timer_label.visible = true
+		else:
+			rest_timer_label.visible = false
+	else:
+		rest_timer_label.visible = false
 
 # --- Drawing ---
 
@@ -886,7 +1285,7 @@ func _draw() -> void:
 
 	var lw := _lane_width()
 	var ls := _lanes_start_x()
-	var hit_y := vp.y * HIT_LINE_RATIO
+	var hit_y := _hit_line_y()
 
 	# Lane backgrounds
 	for idx in range(lane_count):
@@ -898,25 +1297,73 @@ func _draw() -> void:
 	# Hit line
 	draw_line(Vector2(ls, hit_y), Vector2(ls + lane_count * lw, hit_y), HIT_LINE_COLOR, 2.0)
 
-	# Hit zone circles
+	# Hit zone — large squares filling each lane
+	var hz_h := lw * 0.9  # square height ≈ lane width
+	var hz_margin := lw * 0.04
 	for idx in range(lane_count):
-		var cx := ls + (idx + 0.5) * lw
-		var r := lw * 0.28
-		var base_alpha := 0.25
-		# Brighten if lane is pressed
+		var hx := ls + idx * lw + hz_margin
+		var hw := lw - hz_margin * 2.0
+		var hy := hit_y - hz_h / 2.0
+		var base_alpha := 0.2
 		if lane_pressed[idx]:
-			base_alpha = 0.5
-		draw_circle(Vector2(cx, hit_y), r, lane_colors[idx] * Color(1, 1, 1, base_alpha))
-		draw_arc(Vector2(cx, hit_y), r, 0, TAU, 32, lane_colors[idx] * Color(1, 1, 1, base_alpha + 0.2), 2.0)
+			base_alpha = 0.45
+		draw_rect(Rect2(hx, hy, hw, hz_h), lane_colors[idx] * Color(1, 1, 1, base_alpha))
+		# Combo glow border on hit zone
+		if _combo_glow_color.a > 0:
+			var gz_pulse := 0.1 * sin(Time.get_ticks_msec() * 0.005)
+			var gz_a := (_combo_glow_color.a * 0.5 + gz_pulse)
+			draw_rect(Rect2(hx, hy, hw, hz_h), Color(_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, gz_a), false, 3.0)
+		else:
+			draw_rect(Rect2(hx, hy, hw, hz_h), lane_colors[idx] * Color(1, 1, 1, base_alpha + 0.15), false, 2.0)
 
 	# Hit flash effects
 	for eff in hit_effects:
 		var eidx: int = eff["lane"]
 		var ea: float = eff["alpha"]
-		draw_circle(Vector2(ls + (eidx + 0.5) * lw, hit_y), lw * 0.38, lane_colors[eidx] * Color(1, 1, 1, ea))
+		var fx := ls + eidx * lw + hz_margin
+		var fw := lw - hz_margin * 2.0
+		draw_rect(Rect2(fx, hit_y - hz_h / 2.0, fw, hz_h), lane_colors[eidx] * Color(1, 1, 1, ea))
+
+	# Hit ring animations (expanding squares)
+	for ring in hit_rings:
+		var rl: int = ring["lane"]
+		var rr: float = ring["radius"]
+		var ra: float = ring["alpha"]
+		var rx := ls + rl * lw + hz_margin - rr * 0.3
+		var rw := lw - hz_margin * 2.0 + rr * 0.6
+		var rh := hz_h + rr * 0.6
+		draw_rect(Rect2(rx, hit_y - rh / 2.0, rw, rh), lane_colors[rl] * Color(1, 1, 1, ra), false, 2.5)
+
+	# Miss flash — red edges (thick + visible)
+	if _miss_flash_alpha > 0:
+		var mf_a := _miss_flash_alpha * 0.6
+		var mf_col := Color(1, 0.1, 0.05, mf_a)
+		var edge_w := 14.0
+		draw_rect(Rect2(0, 0, edge_w, vp.y), mf_col)
+		draw_rect(Rect2(vp.x - edge_w, 0, edge_w, vp.y), mf_col)
+		draw_rect(Rect2(0, 0, vp.x, edge_w), mf_col)
+		draw_rect(Rect2(0, vp.y - edge_w, vp.x, edge_w), mf_col)
+
+	# Miss lane flashes — soft red glow on missed/wrong-tapped lane
+	for mlf in _miss_lane_flashes:
+		var ml: int = mlf["lane"]
+		var ma: float = mlf["alpha"]
+		if ml >= lane_count:
+			continue
+		var mx := ls + ml * lw
+		# Soft glow radiating from hit line
+		var glow_h := lw * 1.8
+		var glow_top := hit_y - glow_h / 2.0
+		var glow_col := Color(1, 0.15, 0.08, ma * 0.3)
+		draw_rect(Rect2(mx, glow_top, lw, glow_h), glow_col)
+		# Brighter center strip
+		var center_margin := lw * 0.15
+		var center_h := lw * 0.7
+		var center_col := Color(1, 0.2, 0.1, ma * 0.45)
+		draw_rect(Rect2(mx + center_margin, hit_y - center_h / 2.0, lw - center_margin * 2.0, center_h), center_col)
 
 	# Notes
-	var note_h := lw * 0.42
+	var note_h := _note_height()
 	var margin := lw * 0.06
 
 	for idx in range(first_visible_idx, notes.size()):
@@ -926,7 +1373,7 @@ func _draw() -> void:
 		var state: int = note_state[idx]
 
 		# Too far in future
-		if time_until > APPROACH_TIME_MS:
+		if time_until > _approach_time_ms():
 			break
 		# Missed — don't draw
 		if state == 2:
@@ -938,11 +1385,14 @@ func _draw() -> void:
 
 		var x := ls + lane * lw + margin
 		var w := lw - margin * 2.0
-		var ratio := 1.0 - (time_until / APPROACH_TIME_MS)
+		var ratio := 1.0 - (time_until / _approach_time_ms())
 		var y := ratio * hit_y - note_h / 2.0
 
 		var is_hit := (state == 1)
 		var is_holding := (state == 3)
+
+		# Alpha fade: notes fade in as they approach (0.2 at top -> 1.0 at 40% travel)
+		var note_alpha := clampf(ratio / 0.4, 0.2, 1.0) if not is_hit else 0.5
 
 		# Off-screen below — skip
 		if is_hit and y > vp.y + note_h:
@@ -953,7 +1403,7 @@ func _draw() -> void:
 		# --- Sustain tail ---
 		if dur_ms > 0:
 			var tail_until := (t + dur_ms) - song_time_ms
-			var tail_ratio := 1.0 - (tail_until / APPROACH_TIME_MS)
+			var tail_ratio := 1.0 - (tail_until / _approach_time_ms())
 			var tail_y := tail_ratio * hit_y - note_h / 2.0
 
 			var sx := x + w * 0.3
@@ -969,7 +1419,11 @@ func _draw() -> void:
 					var hold_style := sustain_styles_hold[lane]
 					hold_style.bg_color = lane_colors[lane] * Color(1, 1, 1, 0.65 + pulse)
 					draw_style_box(hold_style, Rect2(sx, hold_top, sw, hold_bottom - hold_top + note_h))
-				# Head stays at hit line
+				# Head stays at hit line — with glow if active tier
+				if _combo_glow_color.a > 0:
+					var glow_expand := 4.0
+					var glow_col := Color(_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, _combo_glow_color.a * 0.8)
+					draw_rect(Rect2(x - glow_expand, hit_y - note_h / 2.0 - glow_expand, w + glow_expand * 2, note_h + glow_expand * 2), glow_col)
 				draw_style_box(note_styles[lane], Rect2(x, hit_y - note_h / 2.0, w, note_h))
 				continue
 			elif is_hit:
@@ -983,17 +1437,44 @@ func _draw() -> void:
 
 		# --- Note head ---
 		if is_hit:
-			draw_style_box(note_styles_hit[lane], Rect2(x, y, w, note_h))
+			var sh := note_styles_hit[lane]
+			sh.bg_color.a = note_alpha
+			draw_style_box(sh, Rect2(x, y, w, note_h))
 		elif not is_holding:
-			draw_style_box(note_styles[lane], Rect2(x, y, w, note_h))
+			# Combo glow — expanded colored rect behind note
+			if _combo_glow_color.a > 0:
+				var glow_expand := 4.0
+				var pulse := 0.15 * sin(Time.get_ticks_msec() * 0.006)
+				var glow_a := (_combo_glow_color.a + pulse) * note_alpha
+				var glow_col := Color(_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, glow_a)
+				draw_rect(Rect2(x - glow_expand, y - glow_expand, w + glow_expand * 2, note_h + glow_expand * 2), glow_col)
+			var sn := note_styles[lane]
+			var orig_a := sn.bg_color.a
+			sn.bg_color.a = note_alpha
+			sn.border_color.a = note_alpha
+			draw_style_box(sn, Rect2(x, y, w, note_h))
+			sn.bg_color.a = orig_a
+			sn.border_color.a = orig_a
 
 # --- Layout ---
 
+func _lp() -> Dictionary:
+	return LAYOUT[_orientation]
+
 func _lane_width() -> float:
-	return get_viewport_rect().size.x * HIGHWAY_RATIO / float(lane_count)
+	return get_viewport_rect().size.x * float(_lp()["highway_ratio"]) / float(lane_count)
 
 func _lanes_start_x() -> float:
 	return (get_viewport_rect().size.x - float(lane_count) * _lane_width()) / 2.0
+
+func _hit_line_y() -> float:
+	return get_viewport_rect().size.y * float(_lp()["hit_line_ratio"])
+
+func _note_height() -> float:
+	return _lane_width() * float(_lp()["note_h_ratio"])
+
+func _approach_time_ms() -> float:
+	return Settings.get_approach_ms()
 
 # --- Input (press AND release) ---
 
@@ -1027,9 +1508,17 @@ func _input(event: InputEvent) -> void:
 func _pos_to_lane(pos: Vector2) -> int:
 	var lw := _lane_width()
 	var start := _lanes_start_x()
+	# 20% invisible padding on edges so taps outside highway still register
+	var pad := lw * 0.2
 	var rel := pos.x - start
-	if rel < 0 or rel >= float(lane_count) * lw:
+	if rel < -pad:
 		return -1
+	if rel < 0:
+		return 0
+	if rel >= float(lane_count) * lw + pad:
+		return -1
+	if rel >= float(lane_count) * lw:
+		return lane_count - 1
 	return int(rel / lw)
 
 func _key_to_lane(keycode: int) -> int:
@@ -1058,7 +1547,7 @@ func _try_hit(lane: int) -> void:
 			continue
 		var t: float = n["time_ms"]
 		var diff := absf(song_time_ms - t)
-		if diff > APPROACH_TIME_MS:
+		if diff > _approach_time_ms():
 			break
 		if int(n["lane"]) == lane and diff < best_diff:
 			best_diff = diff
@@ -1079,9 +1568,11 @@ func _try_hit(lane: int) -> void:
 		note_state[best_idx] = 1
 
 	combo += 1
+	hit_count += 1
 	if combo > max_combo:
 		max_combo = combo
-	score += 50 * combo
+	_update_combo_tier()
+	score += int(50.0 * _combo_multiplier)
 
 	# Log first 20 hits for drift diagnosis
 	if _hit_log_count < 20:
@@ -1095,23 +1586,209 @@ func _try_hit(lane: int) -> void:
 			print("Sync: HIT #%d song=%.1f note=%.1f diff=%+.1f abs=%.1f" % [
 				_hit_log_count, song_time_ms, float(n["time_ms"]), signed_diff, best_diff])
 
-	# Hit flash
+	# Hit flash + expanding ring
 	hit_effects.append({"lane": lane, "alpha": 0.8})
+	hit_rings.append({"lane": lane, "radius": _lane_width() * 0.3, "alpha": 0.9})
 
-	# Combo scale animation (reuse tween to avoid micro-stutter from allocation)
+	# Combo scale animation
 	if combo >= 2:
 		var tw := create_tween()
 		tw.tween_property(combo_label, "scale", Vector2(1.25, 1.25), 0.07)
 		tw.tween_property(combo_label, "scale", Vector2(1.0, 1.0), 0.08)
+
+	# Combo milestones — show tier unlock
+	if combo in [25, 50, 100, 200, 300, 500]:
+		var tier_label := _get_combo_tier_label()
+		_show_milestone("%d COMBO! %s" % [combo, tier_label])
+
+func _update_combo_tier() -> void:
+	_combo_multiplier = 1.0
+	_combo_glow_color = Color.TRANSPARENT
+	for tier in COMBO_TIERS:
+		if combo >= int(tier[0]):
+			_combo_multiplier = float(tier[1])
+			_combo_glow_color = tier[2] as Color
+			break
+
+func _get_combo_tier_label() -> String:
+	for tier in COMBO_TIERS:
+		if combo >= int(tier[0]):
+			return tier[3] as String
+	return ""
+
+func _show_milestone(text: String) -> void:
+	milestone_label.text = text
+	milestone_label.modulate.a = 1.0
+	milestone_label.scale = Vector2(0.5, 0.5)
+	var tw := create_tween()
+	tw.tween_property(milestone_label, "scale", Vector2(1.2, 1.2), 0.15).set_ease(Tween.EASE_OUT)
+	tw.tween_property(milestone_label, "scale", Vector2(1.0, 1.0), 0.1)
+	tw.tween_interval(0.6)
+	tw.tween_property(milestone_label, "modulate:a", 0.0, 0.3)
+
+func _on_song_finished() -> void:
+	song_started = false
+	# Count remaining active notes as missed
+	for idx in range(notes.size()):
+		if note_state[idx] == 0:
+			miss_count += 1
+	total_notes = notes.size()
+	# Save score and go to result screen
+	_save_score()
+	_show_result_screen()
+
+func _save_score() -> void:
+	var scores_path := "user://scores.json"
+	var scores := {}
+	if FileAccess.file_exists(scores_path):
+		var f := FileAccess.open(scores_path, FileAccess.READ)
+		if f:
+			var json := JSON.new()
+			if json.parse(f.get_as_text()) == OK and json.data is Dictionary:
+				scores = json.data
+			f.close()
+	var key := "%s_%s_%s_%s" % [song_source.md5_text(), song_instrument, song_difficulty, song_preset]
+	var accuracy := (float(hit_count) / float(total_notes) * 100.0) if total_notes > 0 else 0.0
+	var stars := _calc_stars(accuracy)
+	var entry := {
+		"song": song_source.get_file(),
+		"score": score,
+		"accuracy": snappedf(accuracy, 0.1),
+		"stars": stars,
+		"max_combo": max_combo,
+		"instrument": song_instrument,
+		"difficulty": song_difficulty,
+		"preset": song_preset,
+	}
+	# Only save if better score
+	if not scores.has(key) or int(scores[key].get("score", 0)) < score:
+		scores[key] = entry
+		var f := FileAccess.open(scores_path, FileAccess.WRITE)
+		if f:
+			f.store_string(JSON.stringify(scores))
+			f.close()
+
+func _calc_stars(accuracy: float) -> int:
+	if accuracy >= 98: return 5
+	if accuracy >= 90: return 4
+	if accuracy >= 75: return 3
+	if accuracy >= 50: return 2
+	if accuracy >= 25: return 1
+	return 0
+
+func _show_result_screen() -> void:
+	# Build result screen as overlay
+	var result_layer := CanvasLayer.new()
+	result_layer.layer = 20
+	add_child(result_layer)
+
+	var panel := ColorRect.new()
+	panel.color = Color(0.04, 0.04, 0.06, 0.95)
+	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	panel.theme = _create_theme()
+	result_layer.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	vbox.offset_left = -200; vbox.offset_right = 200
+	vbox.offset_top = -220; vbox.offset_bottom = 220
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var accuracy := (float(hit_count) / float(total_notes) * 100.0) if total_notes > 0 else 0.0
+	var stars := _calc_stars(accuracy)
+
+	# Stars
+	var star_label := Label.new()
+	var star_text := ""
+	for si in range(5):
+		star_text += "[fill]" if si < stars else "[empty]"
+	star_label.text = star_text.replace("[fill]", "★").replace("[empty]", "☆")
+	star_label.add_theme_font_size_override("font_size", 48)
+	star_label.add_theme_color_override("font_color", Color(1, 0.85, 0.15))
+	star_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(star_label)
+
+	# Score
+	var sc_lbl := Label.new()
+	sc_lbl.text = "Skor: %d" % score
+	sc_lbl.add_theme_font_size_override("font_size", 36)
+	sc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(sc_lbl)
+
+	# Stats
+	var stats := Label.new()
+	stats.text = "Isabet: %d / %d  (%%%.1f)\nMaks Kombo: %d\nKaçan: %d" % [
+		hit_count, total_notes, accuracy, max_combo, miss_count]
+	stats.add_theme_font_size_override("font_size", 22)
+	stats.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(stats)
+
+	# Spacer
+	var spacer := Control.new()
+	spacer.custom_minimum_size = Vector2(0, 20)
+	vbox.add_child(spacer)
+
+	# Next preset progression: Tiles → Rahat → Normal → Sadık
+	var preset_order := ["Tiles", "Rahat", "Normal", "Sadik"]
+	var current_idx := preset_order.find(song_preset)
+	if current_idx >= 0 and current_idx < preset_order.size() - 1:
+		var next_preset: String = preset_order[current_idx + 1]
+		var next_btn := Button.new()
+		next_btn.text = "Sonraki: %s" % next_preset
+		next_btn.add_theme_font_size_override("font_size", 24)
+		next_btn.custom_minimum_size = Vector2(250, 56)
+		var next_style := StyleBoxFlat.new()
+		next_style.bg_color = Color(0.15, 0.65, 0.3)
+		next_style.set_corner_radius_all(10)
+		next_style.content_margin_left = 20; next_style.content_margin_right = 20
+		next_style.content_margin_top = 14; next_style.content_margin_bottom = 14
+		next_btn.add_theme_stylebox_override("normal", next_style)
+		var next_hover := next_style.duplicate()
+		next_hover.bg_color = Color(0.2, 0.75, 0.35)
+		next_btn.add_theme_stylebox_override("hover", next_hover)
+		next_btn.pressed.connect(func():
+			song_preset = next_preset
+			get_tree().reload_current_scene()
+		)
+		vbox.add_child(next_btn)
+	elif current_idx == preset_order.size() - 1:
+		# Completed Sadık — show congratulations
+		var congrats := Label.new()
+		congrats.text = "Tebrikler! Tum seviyeleri tamamladin!"
+		congrats.add_theme_font_size_override("font_size", 22)
+		congrats.add_theme_color_override("font_color", Color(1, 0.85, 0.2))
+		congrats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		congrats.autowrap_mode = TextServer.AUTOWRAP_WORD
+		vbox.add_child(congrats)
+
+	# Retry button
+	var retry_btn := Button.new()
+	retry_btn.text = "Tekrar Oyna"
+	retry_btn.add_theme_font_size_override("font_size", 24)
+	retry_btn.custom_minimum_size = Vector2(250, 56)
+	retry_btn.pressed.connect(func(): get_tree().reload_current_scene())
+	vbox.add_child(retry_btn)
+
+	# Back to menu button
+	var menu_btn := Button.new()
+	menu_btn.text = "Sarki Listesi"
+	menu_btn.add_theme_font_size_override("font_size", 24)
+	menu_btn.custom_minimum_size = Vector2(250, 56)
+	menu_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
+	vbox.add_child(menu_btn)
+
+	# Fade in
+	panel.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.4)
 
 func _on_offset_changed(val: float) -> void:
 	audio_offset_ms = val
 	offset_label.text = "Offset: %d ms" % int(val)
 
 func _exit_tree() -> void:
-	for p in _decode_players:
+	for p in audio_players:
 		if is_instance_valid(p):
 			p.stop()
-	if _decode_bus_idx >= 0 and _decode_bus_idx < AudioServer.bus_count:
-		AudioServer.remove_bus(_decode_bus_idx)
-		_decode_bus_idx = -1

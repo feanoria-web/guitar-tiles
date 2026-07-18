@@ -1,0 +1,17 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.guitartiles.audiodecoder" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6
+7    <application>
+7-->C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\main\AndroidManifest.xml:3:5-7:19
+8        <meta-data
+8-->C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\main\AndroidManifest.xml:4:9-6:79
+9            android:name="org.godotengine.plugin.v2.NativeAudioDecoder"
+9-->C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\main\AndroidManifest.xml:5:13-72
+10            android:value="com.guitartiles.audiodecoder.NativeAudioDecoder" />
+10-->C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\main\AndroidManifest.xml:6:13-76
+11    </application>
+12
+13</manifest>

@@ -3,6 +3,20 @@ extends RefCounted
 
 const DIFFICULTIES := ["Easy", "Medium", "Hard", "Expert"]
 
+# Instrument -> chart section suffix mapping
+const INSTRUMENT_SUFFIXES := {
+	"guitar": "Single",
+	"bass": "DoubleBass",
+	"keys": "Keyboard",
+	"drums": "Drums",
+}
+const INSTRUMENT_DISPLAY := {
+	"guitar": "Gitar",
+	"bass": "Bas",
+	"keys": "Klavye",
+	"drums": "Davul",
+}
+
 var resolution: int = 480
 var audio_offset_sec: float = 0.0  # from [Song] Offset field (seconds)
 var bpm_events: Array = []   # [{tick, bpm}]
@@ -12,16 +26,16 @@ var lyric_phrases: Array = [] # [{start_ms, end_ms, text, syllables: [{time_ms, 
 
 var _sections: Dictionary = {}
 
-func parse_file(path: String, difficulty: String = "Expert") -> bool:
+func parse_file(path: String, difficulty: String = "Expert", instrument: String = "guitar") -> bool:
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
 		push_error("ChartParser: cannot open %s" % path)
 		return false
 	var text := file.get_as_text()
 	file.close()
-	return parse_text(text, difficulty)
+	return parse_text(text, difficulty, instrument)
 
-func parse_text(text: String, difficulty: String = "Expert") -> bool:
+func parse_text(text: String, difficulty: String = "Expert", instrument: String = "guitar") -> bool:
 	_sections = _split_sections(text)
 
 	if _sections.has("Song"):
@@ -37,7 +51,8 @@ func parse_text(text: String, difficulty: String = "Expert") -> bool:
 		push_error("ChartParser: no BPM events found")
 		return false
 
-	var section_name := difficulty + "Single"
+	var suffix: String = INSTRUMENT_SUFFIXES.get(instrument, "Single")
+	var section_name: String = difficulty + suffix
 	if _sections.has(section_name):
 		_parse_notes(_sections[section_name])
 	else:
@@ -49,11 +64,35 @@ func parse_text(text: String, difficulty: String = "Expert") -> bool:
 
 	return true
 
-func get_available_difficulties() -> Array[String]:
+func get_available_difficulties(instrument: String = "guitar") -> Array[String]:
+	var suffix: String = INSTRUMENT_SUFFIXES.get(instrument, "Single")
 	var result: Array[String] = []
 	for diff in DIFFICULTIES:
-		if _sections.has(diff + "Single"):
+		if _sections.has(diff + suffix):
 			result.append(diff)
+	return result
+
+## Returns {instrument_key: [difficulties]} for all instruments that have notes.
+## e.g. {"guitar": ["Easy","Hard","Expert"], "bass": ["Expert"]}
+func get_available_instruments() -> Dictionary:
+	var result := {}
+	for inst_key in INSTRUMENT_SUFFIXES:
+		var suffix: String = INSTRUMENT_SUFFIXES[inst_key]
+		var diffs: Array[String] = []
+		for diff in DIFFICULTIES:
+			var section_name: String = diff + suffix
+			if _sections.has(section_name):
+				# Check section actually has note lines (N events)
+				var lines: Array = _sections[section_name]
+				var has_notes := false
+				for line in lines:
+					if (line as String).strip_edges().find("= N ") >= 0:
+						has_notes = true
+						break
+				if has_notes:
+					diffs.append(diff)
+		if diffs.size() > 0:
+			result[inst_key] = diffs
 	return result
 
 static func scan_difficulties_from_file(path: String) -> Array[String]:
@@ -70,6 +109,23 @@ static func scan_difficulties_from_text(text: String) -> Array[String]:
 	var parser := ChartParser.new()
 	parser._sections = parser._split_sections(text)
 	return parser.get_available_difficulties()
+
+## Returns {instrument_key: [difficulties]} scanning from file path.
+static func scan_instruments_from_file(path: String) -> Dictionary:
+	var parser := ChartParser.new()
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var text := file.get_as_text()
+	file.close()
+	parser._sections = parser._split_sections(text)
+	return parser.get_available_instruments()
+
+## Returns {instrument_key: [difficulties]} scanning from text.
+static func scan_instruments_from_text(text: String) -> Dictionary:
+	var parser := ChartParser.new()
+	parser._sections = parser._split_sections(text)
+	return parser.get_available_instruments()
 
 func _split_sections(text: String) -> Dictionary:
 	var sections := {}
@@ -165,6 +221,8 @@ func _parse_notes(lines: Array) -> void:
 func _parse_events(lines: Array) -> void:
 	var phrase_start_ms := -1.0
 	var phrase_syllables: Array = []
+	var has_phrase_markers := false
+	var orphan_lyrics: Array = []  # lyrics outside phrase boundaries
 
 	for line in lines:
 		var parts := (line as String).split("=", true, 1)
@@ -179,6 +237,17 @@ func _parse_events(lines: Array) -> void:
 			content = content.substr(1, content.length() - 2)
 
 		if content == "phrase_start":
+			has_phrase_markers = true
+			# Flush previous phrase if it had lyrics (handles missing phrase_end)
+			if phrase_syllables.size() > 0:
+				var built := _build_phrase_with_positions(phrase_syllables)
+				var end_ms := _tick_to_ms(tick)
+				lyric_phrases.append({
+					"start_ms": phrase_syllables[0]["time_ms"],
+					"end_ms": end_ms,
+					"text": built["text"],
+					"syllables": built["syllables"],
+				})
 			phrase_start_ms = _tick_to_ms(tick)
 			phrase_syllables.clear()
 		elif content == "phrase_end":
@@ -195,10 +264,71 @@ func _parse_events(lines: Array) -> void:
 			phrase_syllables.clear()
 		elif content.begins_with("lyric "):
 			var lyric_text := content.substr(6)
+			# Skip section/mood tags like [idle], [intense], etc.
+			if lyric_text.begins_with("[") and lyric_text.ends_with("]"):
+				continue
+			# Clean Clone Hero lyric markers
+			lyric_text = _clean_lyric_text(lyric_text)
+			if lyric_text == "" or lyric_text == "#":
+				continue
 			var time_ms := _tick_to_ms(tick)
 			lyrics.append({"time_ms": time_ms, "text": lyric_text})
 			if phrase_start_ms >= 0:
 				phrase_syllables.append({"time_ms": time_ms, "text": lyric_text})
+			else:
+				orphan_lyrics.append({"time_ms": time_ms, "text": lyric_text})
+
+	# Flush any unclosed phrase
+	if phrase_syllables.size() > 0:
+		var built := _build_phrase_with_positions(phrase_syllables)
+		lyric_phrases.append({
+			"start_ms": phrase_syllables[0]["time_ms"],
+			"end_ms": float(phrase_syllables[phrase_syllables.size() - 1]["time_ms"]) + 3000.0,
+			"text": built["text"],
+			"syllables": built["syllables"],
+		})
+
+	# If no phrase markers existed, group all lyrics by gap (like MIDI parser)
+	if not has_phrase_markers and orphan_lyrics.size() > 0:
+		_build_phrases_from_gap(orphan_lyrics)
+	elif orphan_lyrics.size() > 0 and lyric_phrases.is_empty():
+		# Phrase markers existed but all lyrics fell outside them
+		_build_phrases_from_gap(orphan_lyrics)
+
+func _build_phrases_from_gap(raw_lyrics: Array) -> void:
+	var phrase_syllables: Array = []
+	var phrase_gap_ms := 2000.0
+	for lyr in raw_lyrics:
+		if phrase_syllables.size() > 0:
+			var last_time: float = phrase_syllables[phrase_syllables.size() - 1]["time_ms"]
+			if float(lyr["time_ms"]) - last_time > phrase_gap_ms:
+				_finalize_gap_phrase(phrase_syllables)
+				phrase_syllables.clear()
+		phrase_syllables.append(lyr)
+	if phrase_syllables.size() > 0:
+		_finalize_gap_phrase(phrase_syllables)
+
+func _finalize_gap_phrase(syllables: Array) -> void:
+	if syllables.is_empty():
+		return
+	var built := _build_phrase_with_positions(syllables)
+	lyric_phrases.append({
+		"start_ms": float(syllables[0]["time_ms"]),
+		"end_ms": float(syllables[syllables.size() - 1]["time_ms"]) + 3000.0,
+		"text": built["text"],
+		"syllables": built["syllables"],
+	})
+
+func _clean_lyric_text(text: String) -> String:
+	# Strip Clone Hero markers: ^=pitch shift, #=breath, various punctuation markers
+	text = text.strip_edges()
+	# Remove leading markers
+	while text.length() > 0 and text[0] in ["^", "#", "§", "=", "$"]:
+		text = text.substr(1)
+	# Remove trailing markers (but keep hyphens — they indicate syllable continuation)
+	while text.length() > 0 and text[text.length() - 1] in ["^", "#", "§", "=", "$"]:
+		text = text.substr(0, text.length() - 1)
+	return text.strip_edges()
 
 func _build_phrase_with_positions(syllables: Array) -> Dictionary:
 	var result := ""

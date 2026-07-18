@@ -102,6 +102,18 @@ func has_midi() -> bool:
 			return true
 	return false
 
+func get_album_art_data() -> PackedByteArray:
+	for fname in files:
+		var fl: String = fname.to_lower()
+		if fl == "album.jpg" or fl == "album.png" or fl == "cover.jpg" or fl == "cover.png":
+			return files[fname]
+	# Fallback: any image file
+	for fname in files:
+		var fl: String = fname.to_lower()
+		if fl.ends_with(".jpg") or fl.ends_with(".png") or fl.ends_with(".jpeg"):
+			return files[fname]
+	return PackedByteArray()
+
 func get_audio_data(preferred: String = "song.opus") -> PackedByteArray:
 	if files.has(preferred):
 		return files[preferred]

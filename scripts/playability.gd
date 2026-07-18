@@ -1,18 +1,19 @@
 class_name Playability
 extends RefCounted
 
-# Preset definitions
+# Preset definitions (order: easy → hard)
 const PRESETS := {
+	"Tiles":  {"chord_mode": "tek",  "density_max": 3, "same_lane_min_ms": 350.0, "sustain_min_ms": 500.0},
 	"Rahat":  {"chord_mode": "tek",  "density_max": 4, "same_lane_min_ms": 200.0, "sustain_min_ms": 300.0},
 	"Normal": {"chord_mode": "cift", "density_max": 5, "same_lane_min_ms": 220.0, "sustain_min_ms": 300.0},
 	"Sadik":  {},  # empty = no processing
 }
 
 # Settings
-var chord_mode: String = "cift"   # "tek", "cift", "tam"
-var density_max: int = 6          # max notes per 1s window
-var same_lane_min_ms: float = 150.0
-var sustain_min_ms: float = 300.0
+var chord_mode: String = "tek"    # "tek", "cift", "tam"
+var density_max: int = 3          # max notes per 1s window
+var same_lane_min_ms: float = 350.0
+var sustain_min_ms: float = 500.0
 var resolution: int = 480
 var enabled: bool = true
 
@@ -229,13 +230,19 @@ func _limit_density(notes: Array) -> Array:
 
 	return result
 
-func _is_on_beat_approx(note: Dictionary, all_notes: Array) -> bool:
-	# Heuristic: notes at "round" ms values (divisible by beat duration ~630ms at 95bpm)
-	# Since we don't have tick info post-parse, use a simple modulo check
-	# Notes closer to 250ms grid boundaries are more likely on-beat
+func _is_on_beat_approx(note: Dictionary, _all_notes: Array) -> bool:
+	# Beat alignment heuristic — notes closer to a beat grid are kept.
+	# Check multiple common grids (quarter, half, whole at ~120bpm = 500ms beat)
 	var t: float = note["time_ms"]
-	var grid := fmod(t, 250.0)
-	return grid < 40.0 or grid > 210.0
+	# Quarter-note grid (~500ms at 120bpm, ~430ms at 140bpm) — use 250ms as half-beat
+	var grid_500 := fmod(t, 500.0)
+	if grid_500 < 50.0 or grid_500 > 450.0:
+		return true  # on a beat
+	# Half-beat grid
+	var grid_250 := fmod(t, 250.0)
+	if grid_250 < 30.0 or grid_250 > 220.0:
+		return true  # on a half-beat
+	return false
 
 # --- Step 5: Clean Sustain Overlaps ---
 
@@ -262,7 +269,7 @@ func _clean_sustain_overlaps(notes: Array) -> Array:
 
 func _print_comparison(original_notes: Array, res: int, lane_count: int) -> void:
 	print("--- Preset Karsilastirma ---")
-	for preset_name in ["Rahat", "Normal", "Sadik"]:
+	for preset_name in ["Tiles", "Rahat", "Normal", "Sadik"]:
 		var p = Playability.new()
 		p.apply_preset(preset_name)
 		if not p.enabled:

@@ -1,0 +1,7 @@
+com.guitartiles.audiodecoder-pngs-0 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\build\generated\res\pngs\release
+com.guitartiles.audiodecoder-resValues-1 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\build\generated\res\resValues\release
+com.guitartiles.audiodecoder-mergeReleaseResources-2 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\build\intermediates\incremental\release\mergeReleaseResources\merged.dir
+com.guitartiles.audiodecoder-mergeReleaseResources-3 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\build\intermediates\incremental\release\mergeReleaseResources\stripped.dir
+com.guitartiles.audiodecoder-release-4 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\build\intermediates\merged_res\release\mergeReleaseResources
+com.guitartiles.audiodecoder-main-5 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\main\res
+com.guitartiles.audiodecoder-release-6 C:\Users\gurka\Documents\guitar-tiles\native_audio_decoder\src\release\res

@@ -15,6 +15,10 @@ run/main_scene="res://scenes/menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.svg"
 
+[audio]
+
+driver/mix_rate=48000
+
 [display]
 
 window/size/viewport_width=1280
@@ -23,13 +27,13 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=1
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/NativeAudioDecoder/plugin.cfg")
+
 [input_devices]
 
 pointing/emulate_touch_from_mouse=true
-
-[audio]
-
-driver/mix_rate=48000
 
 [physics]
 
