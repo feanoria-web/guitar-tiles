@@ -6,10 +6,18 @@
 *.apk
 *.idsig
 *.aab
+*.zip
+/native_audio_decoder/.gradle/
+/native_audio_decoder/build/
 
 # Song content (copyrighted — not distributed with the player)
 songs/
 notes.chart
+
+# Downloaded source packs and local validation output
+/PNG/
+/tmp/
+*.TMP
 
 # Local IDE/tool config
 .claude/

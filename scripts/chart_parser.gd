@@ -23,6 +23,8 @@ var bpm_events: Array = []   # [{tick, bpm}]
 var notes: Array = []        # [{time_ms, lane, duration_ms}]
 var lyrics: Array = []       # [{time_ms, text}]
 var lyric_phrases: Array = [] # [{start_ms, end_ms, text, syllables: [{time_ms, char_start, char_end}]}]
+var overdrive_phrases: Array = [] # [{start_ms, end_ms}]
+var solo_sections: Array = [] # [{start_ms, end_ms}]
 
 var _sections: Dictionary = {}
 
@@ -197,12 +199,35 @@ static func tick_to_ms(tick: int, bpm_events_arr: Array, res: int) -> float:
 	return ms
 
 func _parse_notes(lines: Array) -> void:
+	var solo_start_tick := -1
+	var last_event_tick := 0
 	for line in lines:
 		var parts := (line as String).split("=", true, 1)
 		if parts.size() != 2:
 			continue
 		var tick := int(parts[0].strip_edges())
 		var rest := parts[1].strip_edges()
+		last_event_tick = maxi(last_event_tick, tick)
+		if rest.begins_with("S "):
+			var special_tokens := rest.split(" ", false)
+			if special_tokens.size() >= 3 and int(special_tokens[1]) == 2:
+				var special_dur := maxi(0, int(special_tokens[2]))
+				overdrive_phrases.append({
+					"start_ms": _tick_to_ms(tick),
+					"end_ms": _tick_to_ms(tick + special_dur),
+				})
+			continue
+		if rest.begins_with("E "):
+			var marker := rest.substr(2).strip_edges().trim_prefix("\"").trim_suffix("\"").to_lower()
+			if marker in ["solo", "solo_on", "solo_start"]:
+				solo_start_tick = tick
+			elif marker in ["soloend", "solo_off", "solo_end"] and solo_start_tick >= 0:
+				solo_sections.append({
+					"start_ms": _tick_to_ms(solo_start_tick),
+					"end_ms": _tick_to_ms(tick),
+				})
+				solo_start_tick = -1
+			continue
 		if not rest.begins_with("N "):
 			continue
 		var tokens := rest.split(" ")
@@ -217,12 +242,20 @@ func _parse_notes(lines: Array) -> void:
 		if dur > 0:
 			duration_ms = _tick_to_ms(tick + dur) - time_ms
 		notes.append({"time_ms": time_ms, "lane": fret, "duration_ms": duration_ms})
+		last_event_tick = maxi(last_event_tick, tick + dur)
+
+	if solo_start_tick >= 0 and last_event_tick > solo_start_tick:
+		solo_sections.append({
+			"start_ms": _tick_to_ms(solo_start_tick),
+			"end_ms": _tick_to_ms(last_event_tick),
+		})
 
 func _parse_events(lines: Array) -> void:
 	var phrase_start_ms := -1.0
 	var phrase_syllables: Array = []
 	var has_phrase_markers := false
 	var orphan_lyrics: Array = []  # lyrics outside phrase boundaries
+	var italic_depth := 0  # <i> nesting carried across syllables
 
 	for line in lines:
 		var parts := (line as String).split("=", true, 1)
@@ -247,6 +280,7 @@ func _parse_events(lines: Array) -> void:
 					"end_ms": end_ms,
 					"text": built["text"],
 					"syllables": built["syllables"],
+					"italic_ranges": built["italic_ranges"],
 				})
 			phrase_start_ms = _tick_to_ms(tick)
 			phrase_syllables.clear()
@@ -259,6 +293,7 @@ func _parse_events(lines: Array) -> void:
 					"end_ms": end_ms,
 					"text": built["text"],
 					"syllables": built["syllables"],
+					"italic_ranges": built["italic_ranges"],
 				})
 			phrase_start_ms = -1.0
 			phrase_syllables.clear()
@@ -267,16 +302,20 @@ func _parse_events(lines: Array) -> void:
 			# Skip section/mood tags like [idle], [intense], etc.
 			if lyric_text.begins_with("[") and lyric_text.ends_with("]"):
 				continue
+			# Strip rich-text tags (<i> etc.), keep italic = background vocal flag
+			var tag_res := strip_rich_tags(lyric_text, italic_depth)
+			italic_depth = tag_res["depth"]
 			# Clean Clone Hero lyric markers
-			lyric_text = _clean_lyric_text(lyric_text)
+			lyric_text = _clean_lyric_text(tag_res["text"])
 			if lyric_text == "" or lyric_text == "#":
 				continue
 			var time_ms := _tick_to_ms(tick)
+			var is_italic: bool = tag_res["italic"]
 			lyrics.append({"time_ms": time_ms, "text": lyric_text})
 			if phrase_start_ms >= 0:
-				phrase_syllables.append({"time_ms": time_ms, "text": lyric_text})
+				phrase_syllables.append({"time_ms": time_ms, "text": lyric_text, "italic": is_italic})
 			else:
-				orphan_lyrics.append({"time_ms": time_ms, "text": lyric_text})
+				orphan_lyrics.append({"time_ms": time_ms, "text": lyric_text, "italic": is_italic})
 
 	# Flush any unclosed phrase
 	if phrase_syllables.size() > 0:
@@ -286,6 +325,7 @@ func _parse_events(lines: Array) -> void:
 			"end_ms": float(phrase_syllables[phrase_syllables.size() - 1]["time_ms"]) + 3000.0,
 			"text": built["text"],
 			"syllables": built["syllables"],
+			"italic_ranges": built["italic_ranges"],
 		})
 
 	# If no phrase markers existed, group all lyrics by gap (like MIDI parser)
@@ -317,7 +357,38 @@ func _finalize_gap_phrase(syllables: Array) -> void:
 		"end_ms": float(syllables[syllables.size() - 1]["time_ms"]) + 3000.0,
 		"text": built["text"],
 		"syllables": built["syllables"],
+		"italic_ranges": built["italic_ranges"],
 	})
+
+# Strips TextMeshPro rich-text tags (<i>, </i>, <b>, <color=...> etc.) that
+# Clone Hero charts embed in lyrics. <i>...</i> conventionally marks spoken /
+# background vocals, so the italic state is tracked and returned — the game
+# renders those spans faint. `depth` carries italic nesting across syllables.
+# Returns {text, italic, depth}.
+static func strip_rich_tags(text: String, depth: int) -> Dictionary:
+	if text.find("<") < 0 and depth == 0:
+		return {"text": text, "italic": false, "depth": depth}
+	# Syllable counts as italic if ANY part of it was inside <i>...</i>
+	# (covers tags fully enclosed within one syllable, e.g. "<i>Whoa</i>")
+	var saw_italic := depth > 0
+	var out := ""
+	var i := 0
+	while i < text.length():
+		if text[i] == "<":
+			var close := text.find(">", i)
+			if close > i:
+				var tag := text.substr(i + 1, close - i - 1).to_lower().strip_edges()
+				if tag == "i":
+					depth += 1
+					saw_italic = true
+				elif tag == "/i":
+					depth = maxi(0, depth - 1)
+				# All other tags (b, color=..., size=...) are just stripped
+				i = close + 1
+				continue
+		out += text[i]
+		i += 1
+	return {"text": out, "italic": saw_italic, "depth": depth}
 
 func _clean_lyric_text(text: String) -> String:
 	# Strip Clone Hero markers: ^=pitch shift, #=breath, various punctuation markers
@@ -333,6 +404,7 @@ func _clean_lyric_text(text: String) -> String:
 func _build_phrase_with_positions(syllables: Array) -> Dictionary:
 	var result := ""
 	var positions: Array = []  # [{time_ms, char_start, char_end}]
+	var italic_ranges: Array = []  # [[char_start, char_end], ...] — background vocals
 
 	for syl in syllables:
 		var txt: String = syl["text"]
@@ -358,6 +430,8 @@ func _build_phrase_with_positions(syllables: Array) -> Dictionary:
 		result += display
 		var char_end: int = result.length()
 		positions.append({"time_ms": t_ms, "char_start": char_start, "char_end": char_end})
+		if syl.get("italic", false) and char_end > char_start:
+			italic_ranges.append([char_start, char_end])
 
 		if has_hyphen:
 			result += "-"
@@ -366,7 +440,7 @@ func _build_phrase_with_positions(syllables: Array) -> Dictionary:
 	if result.ends_with("-"):
 		result = result.substr(0, result.length() - 1)
 
-	return {"text": result, "syllables": positions}
+	return {"text": result, "syllables": positions, "italic_ranges": italic_ranges}
 
 func print_summary() -> void:
 	print("=== Chart Parser Summary ===")

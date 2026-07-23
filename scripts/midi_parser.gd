@@ -38,6 +38,8 @@ var bpm_events: Array = []    # [{tick, bpm}]
 var notes: Array = []         # [{time_ms, lane, duration_ms}]
 var lyrics: Array = []        # [{time_ms, text}]
 var lyric_phrases: Array = [] # [{start_ms, end_ms, text, syllables}]
+var overdrive_phrases: Array = [] # [{start_ms, end_ms}]
+var solo_sections: Array = [] # [{start_ms, end_ms}]
 
 func parse_file(path: String, difficulty: String = "Expert", instrument: String = "guitar") -> bool:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -139,6 +141,7 @@ func parse_data(data: PackedByteArray, difficulty: String = "Expert", instrument
 
 	# --- Extract notes for requested difficulty ---
 	_extract_notes(note_track, difficulty)
+	_extract_gameplay_phrases(note_track)
 
 	# --- Extract lyrics from PART VOCALS ---
 	for track in tracks:
@@ -376,11 +379,51 @@ func _extract_notes(track: Dictionary, difficulty: String) -> void:
 			duration_ms = ChartParserScript.tick_to_ms(tick + dur_ticks, bpm_events, resolution) - time_ms
 		notes.append({"time_ms": time_ms, "lane": rn["lane"], "duration_ms": duration_ms})
 
+func _extract_gameplay_phrases(track: Dictionary) -> void:
+	# Note 116 marks an Overdrive phrase. Solo authors use either note 103 or
+	# [solo_on]/[solo_off] text markers, so both forms are accepted.
+	var active_markers := {116: [], 103: []}
+	for ev in track["events"]:
+		if ev["type"] == "note_on" and active_markers.has(int(ev["note"])):
+			active_markers[int(ev["note"])].append(int(ev["tick"]))
+		elif ev["type"] == "note_off" and active_markers.has(int(ev["note"])):
+			var note_number := int(ev["note"])
+			var starts: Array = active_markers[note_number]
+			if not starts.is_empty():
+				var start_tick := int(starts.pop_back())
+				var phrase := {
+					"start_ms": ChartParserScript.tick_to_ms(start_tick, bpm_events, resolution),
+					"end_ms": ChartParserScript.tick_to_ms(int(ev["tick"]), bpm_events, resolution),
+				}
+				if note_number == 116:
+					overdrive_phrases.append(phrase)
+				else:
+					solo_sections.append(phrase)
+
+	if solo_sections.is_empty():
+		var solo_start_tick := -1
+		for ev in track["events"]:
+			if ev["type"] != "text":
+				continue
+			var marker := String(ev["text"]).strip_edges().trim_prefix("[").trim_suffix("]").to_lower()
+			if marker in ["solo", "solo_on", "solo_start"]:
+				solo_start_tick = int(ev["tick"])
+			elif marker in ["soloend", "solo_off", "solo_end"] and solo_start_tick >= 0:
+				solo_sections.append({
+					"start_ms": ChartParserScript.tick_to_ms(solo_start_tick, bpm_events, resolution),
+					"end_ms": ChartParserScript.tick_to_ms(int(ev["tick"]), bpm_events, resolution),
+				})
+				solo_start_tick = -1
+
+	overdrive_phrases.sort_custom(func(a, b): return a["start_ms"] < b["start_ms"])
+	solo_sections.sort_custom(func(a, b): return a["start_ms"] < b["start_ms"])
+
 # --- Lyric extraction ---
 
 func _extract_lyrics(track: Dictionary) -> void:
 	# Collect raw lyrics
-	var raw_lyrics: Array = []  # [{time_ms, text}]
+	var raw_lyrics: Array = []  # [{time_ms, text, italic}]
+	var italic_depth := 0  # <i> nesting carried across syllables
 	for ev in track["events"]:
 		if ev["type"] != "lyric" and ev["type"] != "text":
 			continue
@@ -390,6 +433,10 @@ func _extract_lyrics(track: Dictionary) -> void:
 		# Skip section/mood tags like [idle], [intense], [mellow], [play], etc.
 		if text.begins_with("[") and text.ends_with("]"):
 			continue
+		# Strip rich-text tags (<i> etc.), keep italic = background vocal flag
+		var tag_res := ChartParserScript.strip_rich_tags(text, italic_depth)
+		italic_depth = tag_res["depth"]
+		text = tag_res["text"]
 		# Remove leading/trailing Clone Hero markers: # ^ § = $
 		while text.length() > 0 and text[0] in ["#", "^", "§", "=", "$"]:
 			text = text.substr(1)
@@ -399,7 +446,7 @@ func _extract_lyrics(track: Dictionary) -> void:
 		if text == "":
 			continue
 		var time_ms := ChartParserScript.tick_to_ms(ev["tick"], bpm_events, resolution)
-		raw_lyrics.append({"time_ms": time_ms, "text": text})
+		raw_lyrics.append({"time_ms": time_ms, "text": text, "italic": tag_res["italic"]})
 
 	if raw_lyrics.is_empty():
 		return
@@ -464,6 +511,7 @@ func _finalize_phrase_with_end(syllables: Array, end_ms: float) -> void:
 		return
 	var full_text := ""
 	var positions: Array = []
+	var italic_ranges: Array = []
 	for syl in syllables:
 		var txt: String = syl["text"]
 		var t_ms: float = syl["time_ms"]
@@ -477,6 +525,8 @@ func _finalize_phrase_with_end(syllables: Array, end_ms: float) -> void:
 		full_text += display
 		var char_end: int = full_text.length()
 		positions.append({"time_ms": t_ms, "char_start": char_start, "char_end": char_end})
+		if syl.get("italic", false) and char_end > char_start:
+			italic_ranges.append([char_start, char_end])
 		if has_hyphen:
 			full_text += "-"
 	if full_text.ends_with("-"):
@@ -486,6 +536,7 @@ func _finalize_phrase_with_end(syllables: Array, end_ms: float) -> void:
 		"end_ms": end_ms,
 		"text": full_text,
 		"syllables": positions,
+		"italic_ranges": italic_ranges,
 	})
 
 func _finalize_phrase(syllables: Array) -> void:
@@ -494,6 +545,7 @@ func _finalize_phrase(syllables: Array) -> void:
 
 	var full_text := ""
 	var positions: Array = []
+	var italic_ranges: Array = []
 
 	for syl in syllables:
 		var txt: String = syl["text"]
@@ -513,6 +565,8 @@ func _finalize_phrase(syllables: Array) -> void:
 		full_text += display
 		var char_end: int = full_text.length()
 		positions.append({"time_ms": t_ms, "char_start": char_start, "char_end": char_end})
+		if syl.get("italic", false) and char_end > char_start:
+			italic_ranges.append([char_start, char_end])
 
 		if has_hyphen:
 			full_text += "-"
@@ -529,6 +583,7 @@ func _finalize_phrase(syllables: Array) -> void:
 		"end_ms": end_ms,
 		"text": full_text,
 		"syllables": positions,
+		"italic_ranges": italic_ranges,
 	})
 
 # --- Binary reading helpers (big-endian) ---

@@ -1,0 +1,13 @@
+Guitar miss sound effect
+
+Title: A3
+Creator: Skamos66 (Freesound), distributed by freesound_community on Pixabay
+Source: https://pixabay.com/sound-effects/musical-a3-101081/
+File: guitar_miss.mp3
+License: Pixabay Content License
+License summary: https://pixabay.com/service/license-summary/
+Downloaded: 2026-07-22
+
+The asset is a single plucked guitar note used as a short wrong-note gameplay
+cue. See the source and
+Pixabay Content License for the complete license terms.

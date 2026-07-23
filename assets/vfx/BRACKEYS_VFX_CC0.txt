@@ -1,0 +1,19 @@
+Brackeys' VFX Bundle
+Source: https://brackeysgames.itch.io/brackeys-vfx-bundle
+License: Creative Commons Zero (CC0)
+
+Asset used by Riffline:
+- electric_ring_6x5.png, renamed to brackeys_electric_ring.png
+- impact_white_6x4.png, renamed to brackeys_impact_white.png
+- lightstreaks_6x5.png, renamed to brackeys_lightstreaks.png
+- fire_04_8x8.tga, converted to brackeys_fire_04.png
+- wispy_smoke_01_8x8.tga, converted to brackeys_wispy_smoke_01.png
+
+The electric, impact, and lightstreak spritesheets were converted to neutral
+transparent alpha masks so they can inherit gameplay colors without showing
+black backgrounds. The fire sheet retained its original orange color while its
+black background was converted to transparency; the smoke sheet retained its
+original transparency and color.
+
+Original pre-drawn spritesheet creator: CodeManu
+Bundle repackaged and modified by Brackeys.

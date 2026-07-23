@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.guitartiles.audiodecoder"
+    namespace = "com.riffline.audiodecoder"
     compileSdk = 36
 
     defaultConfig {

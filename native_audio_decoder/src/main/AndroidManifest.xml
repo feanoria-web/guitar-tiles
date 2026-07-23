@@ -3,6 +3,6 @@
     <application>
         <meta-data
             android:name="org.godotengine.plugin.v2.NativeAudioDecoder"
-            android:value="com.guitartiles.audiodecoder.NativeAudioDecoder" />
+            android:value="com.riffline.audiodecoder.NativeAudioDecoder" />
     </application>
 </manifest>

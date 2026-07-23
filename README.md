@@ -1,8 +1,8 @@
-# 🎸 Guitar Tiles
+# 🎸 Riffline
 
-**Turn any guitar chart into a mobile rhythm game — instantly.**
+**Turn any rhythm-game chart into a mobile performance — instantly.**
 
-Guitar Tiles transforms Clone Hero, Rock Band, and custom song charts into a fast, fluid tap experience on your phone. No controllers. No cables. Just you, your music, and your reflexes.
+Riffline transforms Clone Hero, Rock Band, and custom song charts into a fast, fluid tap experience on your phone. No controllers. No cables. Just you, your music, and your reflexes.
 
 ---
 
@@ -18,9 +18,13 @@ Guitar Tiles transforms Clone Hero, Rock Band, and custom song charts into a fas
 | Preset | Style |
 |--------|-------|
 | **Tiles** | Simplified for mobile — pure rhythm, no chords |
+| **Tiles Akıcı** | Tiles density with assisted lane flow and timing |
 | **Rahat** | Relaxed — slightly more notes, still comfortable |
-| **Normal** | Faithful to the original chart with chords |
+| **Rahat Akıcı** | Relaxed density with assisted lane flow and timing |
+| **Normal** | More chart detail with chords |
+| **Normal Akıcı** | Normal density with assisted lane flow and timing |
 | **Sadık** | 100% original — every note, every chord, no mercy |
+| **Sadık Akıcı** | Full original density with mobile playability assists |
 
 ### 🎸 Full Instrument Support
 - Guitar / Bass / Keys / Drums
@@ -28,7 +32,7 @@ Guitar Tiles transforms Clone Hero, Rock Band, and custom song charts into a fas
 - Automatic instrument detection from chart files
 
 ### 📱 Designed for Mobile
-- Portrait & landscape orientations
+- Portrait-first phone and tablet layout
 - Touch-optimized highway with invisible edge padding
 - Smooth alpha-fade note approach
 - Hit ring animations & miss flash feedback
@@ -109,5 +113,5 @@ MIT — see [LICENSE](LICENSE) for details.
 
 <p align="center">
   <b>Your charts. Your phone. Your stage.</b><br>
-  <i>Guitar Tiles — rhythm gaming, unchained.</i>
+  <i>Riffline — rhythm gaming, unchained.</i>
 </p>

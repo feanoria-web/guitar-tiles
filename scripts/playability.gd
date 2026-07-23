@@ -4,16 +4,33 @@ extends RefCounted
 # Preset definitions (order: easy → hard)
 const PRESETS := {
 	"Tiles":  {"chord_mode": "tek",  "density_max": 3, "same_lane_min_ms": 350.0, "sustain_min_ms": 500.0},
+	"TilesAkici": {"chord_mode": "tek", "density_max": 3, "same_lane_min_ms": 350.0,
+		"sustain_min_ms": 500.0, "preserve_notes": true, "assisted": true},
 	"Rahat":  {"chord_mode": "tek",  "density_max": 4, "same_lane_min_ms": 200.0, "sustain_min_ms": 300.0},
+	"RahatAkici": {"chord_mode": "tek", "density_max": 4, "same_lane_min_ms": 260.0,
+		"sustain_min_ms": 300.0, "preserve_notes": true, "assisted": true},
 	"Normal": {"chord_mode": "cift", "density_max": 5, "same_lane_min_ms": 220.0, "sustain_min_ms": 300.0},
+	"NormalAkici": {"chord_mode": "cift", "density_max": 5, "same_lane_min_ms": 260.0,
+		"sustain_min_ms": 300.0, "preserve_notes": true, "assisted": true},
+	# Faithful note count/density with mobile-only lane and overlap assistance.
+	"Akici":  {"chord_mode": "tam", "density_max": 0, "same_lane_min_ms": 260.0,
+		"sustain_min_ms": 0.0, "preserve_notes": true, "assisted": true},
 	"Sadik":  {},  # empty = no processing
 }
+const PRESET_ORDER := [
+	"Tiles", "TilesAkici", "Rahat", "RahatAkici",
+	"Normal", "NormalAkici", "Sadik", "Akici",
+]
+
+static func is_assisted_preset(preset_name: String) -> bool:
+	return bool(PRESETS.get(preset_name, {}).get("assisted", false))
 
 # Settings
 var chord_mode: String = "tek"    # "tek", "cift", "tam"
 var density_max: int = 3          # max notes per 1s window
 var same_lane_min_ms: float = 350.0
 var sustain_min_ms: float = 500.0
+var preserve_notes: bool = false
 var resolution: int = 480
 var enabled: bool = true
 
@@ -28,6 +45,7 @@ var _log_sustain_overlap: int = 0
 var _log_zigzag: int = 0
 
 func apply_preset(preset_name: String) -> void:
+	preserve_notes = false
 	if preset_name == "Sadik" or not PRESETS.has(preset_name):
 		enabled = false
 		return
@@ -37,6 +55,7 @@ func apply_preset(preset_name: String) -> void:
 	density_max = p.get("density_max", 6)
 	same_lane_min_ms = p.get("same_lane_min_ms", 150.0)
 	sustain_min_ms = p.get("sustain_min_ms", 300.0)
+	preserve_notes = bool(p.get("preserve_notes", false))
 
 func process(notes: Array, res: int, lane_count: int) -> Array:
 	if not enabled or notes.is_empty():
@@ -168,8 +187,13 @@ func _fix_same_lane_spacing(notes: Array, lane_count: int) -> Array:
 
 		if too_close or force_zigzag:
 			var shifted := false
-			# Prefer alternating sides for zigzag feel
-			var offsets := [1, -1, 2, -2]
+			# Prefer alternating sides for a zigzag feel, but inspect every lane.
+			# The old fixed +/-2 list left lanes 3-4 unused when a burst started at
+			# an edge, causing unnecessary same-lane stacks in five-lane charts.
+			var offsets: Array[int] = []
+			for distance in range(1, lane_count):
+				offsets.append(distance)
+				offsets.append(-distance)
 			for offset in offsets:
 				var new_lane: int = lane + offset
 				if new_lane < 0 or new_lane >= lane_count:
@@ -185,8 +209,13 @@ func _fix_same_lane_spacing(notes: Array, lane_count: int) -> Array:
 					consecutive_count[lane] = 0
 					break
 			if not shifted:
-				_log_lane_removed += 1
-				continue
+				if preserve_notes:
+					# Assisted Faithful mode keeps the authored note. The gameplay
+					# layer will merge this rare no-free-lane case into a tap cluster.
+					last_time[lane] = t
+				else:
+					_log_lane_removed += 1
+					continue
 		else:
 			last_time[lane] = t
 
@@ -249,6 +278,7 @@ func _is_on_beat_approx(note: Dictionary, _all_notes: Array) -> bool:
 func _clean_sustain_overlaps(notes: Array) -> Array:
 	# Remove notes that fall during an active sustain on the same lane
 	var lane_sustain_end := {}  # lane -> end_time_ms
+	var lane_sustain_note := {} # lane -> active sustain Dictionary
 	var result: Array = []
 
 	for n in notes:
@@ -258,18 +288,30 @@ func _clean_sustain_overlaps(notes: Array) -> Array:
 
 		# Check if this note falls inside an active sustain on same lane
 		if lane_sustain_end.has(lane) and t < float(lane_sustain_end[lane]) - 10.0:
-			_log_sustain_overlap += 1
-			continue
+			if preserve_notes:
+				# Keep the new note and end the previous hold shortly before it.
+				# This preserves Sadık's note count without asking one finger to
+				# hold and retrigger the same lane simultaneously.
+				var previous: Dictionary = lane_sustain_note[lane]
+				var previous_start := float(previous["time_ms"])
+				previous["duration_ms"] = maxf(0.0, t - previous_start - 60.0)
+				_log_sustain_trimmed += 1
+				lane_sustain_end.erase(lane)
+				lane_sustain_note.erase(lane)
+			else:
+				_log_sustain_overlap += 1
+				continue
 
 		result.append(n)
 		if dur > 0:
 			lane_sustain_end[lane] = t + dur
+			lane_sustain_note[lane] = n
 
 	return result
 
 func _print_comparison(original_notes: Array, res: int, lane_count: int) -> void:
 	print("--- Preset Karsilastirma ---")
-	for preset_name in ["Tiles", "Rahat", "Normal", "Sadik"]:
+	for preset_name in PRESET_ORDER:
 		var p = Playability.new()
 		p.apply_preset(preset_name)
 		if not p.enabled:

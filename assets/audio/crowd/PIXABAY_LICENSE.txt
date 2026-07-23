@@ -1,0 +1,43 @@
+Crowd audio sources
+Accessed: 2026-07-21
+License: Pixabay Content License
+https://pixabay.com/service/license-summary/
+
+crowd_ambience.mp3
+"Crowd Talking Quietly Stadium" by freesound_community
+https://pixabay.com/sound-effects/people-crowd-talking-quietly-stadium-102065/
+
+crowd_cheer.mp3
+"Crowd Cheering" by Mykelu
+https://pixabay.com/sound-effects/people-crowd-cheering-383111/
+
+crowd_boo.mp3
+"Crowd Booing" by Dragon Studio
+https://pixabay.com/sound-effects/people-crowd-booing-494319/
+
+crowd_applause_strong.mp3
+"Audience applause with cheering" by freesound_community
+https://pixabay.com/sound-effects/people-audience-applause-with-cheering-100682/
+
+crowd_applause_light.mp3
+"Applause 2" by freesound_community
+https://pixabay.com/sound-effects/people-applause-2-43686/
+
+crowd_cheer_2.mp3
+"Crowd Cheer" by DRAGON-STUDIO
+https://pixabay.com/sound-effects/people-crowd-cheer-406646/
+
+crowd_boo_2.mp3
+"Crowd Disappointment Reaction" by Universfield
+https://pixabay.com/sound-effects/people-crowd-disappointment-reaction-352718/
+
+crowd_boo_3.mp3
+"boo" by freesound_community
+https://pixabay.com/sound-effects/people-boo-6377/
+
+crowd_ambience_3.mp3
+"Indoor crowd background" by freesound_community
+https://pixabay.com/sound-effects/people-indoor-crowd-background-96949/
+
+These files are bundled as part of the game and are not redistributed as
+standalone media.
