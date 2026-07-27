@@ -33,14 +33,16 @@
 <body>
 
 <h1>Riffline — Privacy Policy</h1>
-<p class="updated">Last updated: July 25, 2026</p>
+<p class="updated">Last updated: July 27, 2026</p>
 
 <p>Riffline ("the app") is developed by Feanorian ("we", "us"). This policy explains what happens to your data when you use the app.</p>
 
 <h2>Summary</h2>
 <ul>
-  <li>Riffline works fully offline and does not request internet access.</li>
-  <li>We do not collect, store, or transmit any personal data, account information, or device identifiers.</li>
+  <li>Riffline's single-player features work offline. Internet access is used only for optional online multiplayer and external links.</li>
+  <li>Online multiplayer uses Firebase Authentication and Realtime Database for temporary rooms and WebRTC connection setup.</li>
+  <li>Players in the same room receive your chosen player name, instrument/ready state, live score and gameplay status.</li>
+  <li>Imported song, chart and audio files are never uploaded to Firebase or sent to other players.</li>
   <li>The app contains no ads, no analytics, and no crash-reporting SDKs.</li>
 </ul>
 
@@ -48,16 +50,45 @@
 <p>When you import a song file, Riffline uses Android's standard file picker (Storage Access Framework). You choose the file directly; the app only reads the file you select and copies it into its own private app storage on your device. Riffline never scans your device's storage, never requests broad storage or media permissions, and never uploads imported files anywhere.</p>
 
 <h2>Scores and progress</h2>
-<p>Your scores, high scores, and settings are saved in a file on your device only. This data is never sent off your device and is deleted automatically if you uninstall the app.</p>
+<p>Your single-player scores, high scores and settings are saved in a file on your device only and are deleted when you uninstall the app. During an online match, your current score, combo, performance meter and song position are transmitted directly to the room host and other players so that the shared scoreboard and Band mode can function. Online match state is not used for advertising or profiling.</p>
+
+<h2>Online multiplayer data</h2>
+<p>Online multiplayer is optional. When you create or join a room, the app processes the following information:</p>
+<ul>
+  <li>A random anonymous Firebase user ID and authentication token.</li>
+  <li>The player name you choose to enter.</li>
+  <li>Room code, host/player role, selected mode, instrument, difficulty, gameplay preset and ready state.</li>
+  <li>The selected song's display name, available instrument list and a technical fingerprint used only to confirm that every player already has the same local song files.</li>
+  <li>WebRTC connection data such as offers, answers and ICE candidates. This connection data may contain network information, including IP addresses, required to establish a peer-to-peer connection.</li>
+</ul>
+<p>Firebase Realtime Database is used only for room membership and WebRTC signalling. Once a connection is established, live match data travels directly between players through an encrypted WebRTC data channel in a host-authoritative star connection. Firebase does not receive imported song or audio files.</p>
+
+<h2>Who receives multiplayer data</h2>
+<ul>
+  <li><strong>Other players in your room:</strong> your player name, chosen instrument, ready state, score, combo and current performance status.</li>
+  <li><strong>Google Firebase:</strong> anonymous authentication and temporary room/signalling records, acting as our infrastructure service provider.</li>
+  <li><strong>STUN service:</strong> Google-operated STUN servers may process network address information to help establish a direct WebRTC connection. STUN does not receive your imported songs or live score data.</li>
+</ul>
+<p>We do not sell multiplayer data, use it for advertising, or share it with data brokers.</p>
+
+<h2>Retention and deletion</h2>
+<p>Room records are intended to be temporary. A room is normally deleted from Firebase when its host leaves, and a guest's player record is normally deleted when that guest leaves. If the app or network closes unexpectedly, a temporary room record may remain until it is removed during database maintenance. Firebase may retain anonymous authentication records and limited service/security logs according to Google's own retention practices.</p>
+<p>You can stop future multiplayer processing by leaving the room or not using online multiplayer. To request deletion of multiplayer records associated with a room or to ask a privacy question, contact us at the address below and include the room code and approximate date/time where possible. Do not send song files, passwords or signing keys.</p>
 
 <h2>Permissions</h2>
-<p>Riffline does not request location, contacts, camera, microphone, network, or install-unknown-apps permissions. The app only needs local storage access (through the file picker described above) to import songs.</p>
+<p>Riffline requests Android's Internet permission for optional online multiplayer. It does not request location, contacts, camera, microphone, broad storage/media access, notification, or install-unknown-apps permissions. Local songs are selected through Android's system file picker.</p>
+
+<h2>Security</h2>
+<p>Firebase traffic is sent over HTTPS, and direct multiplayer traffic uses an encrypted WebRTC data channel. Access to Firebase room data is restricted by authentication and database security rules. No internet transmission method can be guaranteed to be completely secure, but we limit multiplayer data to what is needed to provide the feature.</p>
 
 <h2>External links</h2>
-<p>The song browser menu includes optional links to third-party community sites (such as enchor.us and rhythmverse.co) where you can find additional song files. These links open in your device's browser. Riffline does not share any data with these sites, and your use of them is governed by their own privacy policies, not this one.</p>
+<p>The app may include optional links to third-party websites. These links open in your device's browser. Riffline does not send your multiplayer or song data to those websites. Your browser and the destination website handle any data under their own privacy policies.</p>
 
 <h2>Children's privacy</h2>
-<p>Riffline does not knowingly collect any data from anyone, including children, because it does not collect data from any user.</p>
+<p>Riffline is not directed to children under 13, and we do not knowingly collect personal information from children. Online multiplayer does not require an email address or permanent Riffline account. If you believe a child has submitted personal information as a player name, contact us so that we can review and delete the relevant record where available.</p>
+
+<h2>Service provider</h2>
+<p>Online multiplayer uses Google Firebase. Information about Firebase privacy and security is available at <a href="https://firebase.google.com/support/privacy">firebase.google.com/support/privacy</a>.</p>
 
 <h2>Changes to this policy</h2>
 <p>If this policy changes, the updated version will be posted at this same URL with a new "Last updated" date.</p>
@@ -67,7 +98,9 @@
 
 <hr>
 
-<p class="lang-note">Türkçe özet: Riffline tamamen çevrimdışı çalışır, internet izni istemez ve kullanıcıdan hiçbir kişisel veri toplamaz. İçe aktardığınız şarkı dosyaları yalnızca cihazınızda saklanır ve hiçbir sunucuya gönderilmez. Skorlarınız ve ayarlarınız yalnızca cihazınızda tutulur. Sorularınız için: gurkangr696@gmail.com</p>
+<h2>Türkçe Özet</h2>
+<p class="lang-note">Riffline'ın tek oyunculu özellikleri çevrimdışı çalışır. İnternet izni yalnızca isteğe bağlı çevrimiçi multiplayer ve harici bağlantılar için kullanılır. Multiplayer sırasında Firebase tarafından rastgele bir anonim kullanıcı kimliği oluşturulur; seçtiğiniz oyuncu adı, oda kodu, enstrüman, zorluk, preset ve hazır durumu geçici oda/sinyalleşme verisi olarak işlenir. Aynı odadaki oyuncular oyuncu adınızı ve canlı skor, combo ve performans durumunuzu görür. WebRTC bağlantısı kurulurken IP adresi gibi ağ bilgileri işlenebilir.</p>
+<p class="lang-note">İçe aktardığınız chart, şarkı ve ses dosyaları Firebase'e yüklenmez ve diğer oyunculara gönderilmez. Tek oyunculu skorlar ile ayarlar yalnızca cihazınızda tutulur. Oda, sahibi normal şekilde ayrıldığında; misafir kaydı ise misafir ayrıldığında silinir. Beklenmeyen bağlantı kesintilerinde geçici kayıtlar bakım sırasında silinene kadar kalabilir. Riffline reklam, analitik veya çökme raporlama SDK'sı içermez ve multiplayer verilerini satmaz. Veri silme talebi veya sorularınız için: <a href="mailto:gurkangr696@gmail.com">gurkangr696@gmail.com</a>.</p>
 
 </body>
 </html>
