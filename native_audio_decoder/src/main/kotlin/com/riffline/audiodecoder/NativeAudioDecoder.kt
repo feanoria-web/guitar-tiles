@@ -149,7 +149,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 val fname = File(path).name
                 val stage = "$fname (${idx + 1}/$total)"
                 Log.i(TAG, "${PREFIX}decoding $stage...")
-                emitProgress(((idx) * 80) / total, "Çözümleniyor: $stage")
+                emitProgress(((idx) * 80) / total, "decode|$fname|${idx + 1}|$total")
 
                 val stemT0 = System.currentTimeMillis()
 
@@ -174,7 +174,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                     logHeap("after exception on $fname")
                 }
 
-                emitProgress(((idx + 1) * 80) / total, "Çözümleniyor: $stage")
+                emitProgress(((idx + 1) * 80) / total, "decode|$fname|${idx + 1}|$total")
             }
 
             if (cancelFlag.get()) {
@@ -192,7 +192,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             }
 
             logHeap("after all decodes")
-            emitProgress(85, "Normalize ediliyor...")
+            emitProgress(85, "normalize")
 
             // 4. Peak scan
             var peak = 0f
@@ -209,7 +209,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 return
             }
 
-            emitProgress(90, "WAV yazılıyor...")
+            emitProgress(90, "write_wav")
 
             // 5. Write WAV (using source's actual sample rate — no resampling)
             writeWavFromMapped(floatBuf, actualLen, peak, normalized, outputWav, outputRate)
@@ -224,7 +224,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
             Log.i(TAG, "${PREFIX}mixed $decodedCount stems (preview excluded) in ${elapsed}ms, rate=${outputRate}Hz, peak=%.1f, normalized=$normalized, RAM stable".format(peak))
             logHeap("finished")
 
-            emitProgress(100, "Tamamlandı")
+            emitProgress(100, "complete")
             emitDone(outputWav)
 
         } catch (t: Throwable) {
@@ -437,7 +437,7 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                                 val overallPct = overallBase + (stemPct * overallRange / 100)
                                 if (overallPct >= lastProgressPct + 5) {
                                     lastProgressPct = overallPct
-                                    emitProgress(overallPct, "Çözümleniyor: $fname (${stemIdx + 1}/$totalStems)")
+                                    emitProgress(overallPct, "decode|$fname|${stemIdx + 1}|$totalStems")
                                 }
                             }
                         }
@@ -1240,9 +1240,9 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
      * Open Android file picker that allows selecting ANY file type.
      * Uses ACTION_GET_CONTENT which bypasses Samsung file type restrictions.
      * Result delivered via "files_picked" signal (semicolon-separated content URIs).
-     */
+    */
     @UsedByGodot
-    fun openFilePicker() {
+    fun openFilePicker(title: String) {
         val act = activity ?: run {
             Log.e(TAG, "${PREFIX}openFilePicker: no activity")
             runOnRenderThread { emitSignal("files_picked", "") }
@@ -1254,7 +1254,10 @@ class NativeAudioDecoder(godot: Godot) : GodotPlugin(godot) {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             }
-            act.startActivityForResult(Intent.createChooser(intent, "Sarki Dosyasi Sec"), PICK_FILES_REQUEST)
+            act.startActivityForResult(
+                Intent.createChooser(intent, title),
+                PICK_FILES_REQUEST
+            )
             Log.i(TAG, "${PREFIX}openFilePicker: launched")
         } catch (e: Throwable) {
             Log.e(TAG, "${PREFIX}openFilePicker failed: ${e.message}")

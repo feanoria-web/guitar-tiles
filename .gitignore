@@ -1,6 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+/.signing/
+*.jks
+*.keystore
 
 # Build artifacts
 *.apk
@@ -18,6 +21,15 @@ notes.chart
 /PNG/
 /tmp/
 *.TMP
+/cloudflare/song-relay/node_modules/
+/cloudflare/song-relay/.wrangler/
+/cloudflare/song-relay/.dev.vars
+
+# Ripped highway source bundles (Activision / Harmonix). Redistribution rights
+# were never established, and this is a public repo. Local working material
+# only — derived runtime art lives in assets/highways/.
+/All GH Highways Now With More Calcium/
+/RB4 CH Highways/
 
 # Local IDE/tool config
 .claude/
