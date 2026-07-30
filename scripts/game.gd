@@ -256,6 +256,12 @@ var audio_offset_ms: float = 0.0
 var song_started: bool = false
 var song_time_ms: float = 0.0
 var first_visible_idx: int = 0
+# Rendering cursor, always <= first_visible_idx. A sustain's tail outlives its
+# head by its whole duration, so culling the draw loops on head time made any
+# sustain longer than the approach plus linger window vanish off the top of the
+# highway while it was still being held and still scoring. Gameplay loops keep
+# using first_visible_idx so hit detection and miss marking are unchanged.
+var _first_drawn_idx: int = 0
 var current_phrase_idx: int = 0
 var lane_count: int = 5
 var lane_colors: Array[Color] = []
@@ -309,6 +315,8 @@ const GH_HIT_PAD_MARGIN_RATIO := 0.04
 # sustain approaches and becomes white-hot only after the head is held. The
 # quality-specific caps keep dense charts cheap on mobile GPUs.
 const SUSTAIN_LIGHTNING_MIN_DURATION_MS := 180.0
+# Half-width of the sustain rod at the hit line, as a fraction of lane width.
+const SUSTAIN_ROD_HALF_WIDTH := 0.17
 
 # Beat lines (from tempo map)
 var beat_times: PackedFloat64Array = PackedFloat64Array()
@@ -663,9 +671,10 @@ func _configure_guitar_visuals() -> void:
 				ARENA_HIGHWAY_TEXTURE_PATH) as Texture2D
 		if _arena_highway_texture:
 			_configure_arena_highway_tiling(highway_image)
-		if ResourceLoader.exists(ARENA_EFFECT_ATLAS_PATH):
-			_arena_effect_texture = ResourceLoader.load(
-				ARENA_EFFECT_ATLAS_PATH) as Texture2D
+		# The RB4 video atlas is deliberately not loaded any more. It stored a
+		# 512x1024 source at 96x192 per frame and then magnified it ~11x back
+		# onto the deck, so it could only ever read as a smear. The combo
+		# lighting below is procedural, sharp at any resolution and free.
 	# The deck is the only thing that samples outside [0, 1]. Wrapping keeps
 	# directional GH art facing the player; mirroring is reserved for imports
 	# whose first and last rows do not meet.
@@ -2042,6 +2051,7 @@ func _load_song() -> void:
 	note_state.resize(notes.size())
 	note_state.fill(0)
 	first_visible_idx = 0
+	_first_drawn_idx = 0
 	current_phrase_idx = 0
 	total_notes = notes.size()
 	hit_count = 0
@@ -3484,12 +3494,7 @@ func _process(delta: float) -> void:
 				_combo_popup_tw.kill()
 			combo_label.modulate.a = 0.0
 
-	# Advance first_visible_idx past notes way off-screen
-	while first_visible_idx < notes.size():
-		var t: float = notes[first_visible_idx]["time_ms"]
-		if song_time_ms - t < _approach_time_ms() + HIT_LINGER_MS:
-			break
-		first_visible_idx += 1
+	_advance_note_cursors()
 
 	# Update sustain holds
 	_update_sustains()
@@ -3627,6 +3632,25 @@ func _update_stage_event_cursors() -> void:
 			_stage_last_event_ms[role] = event_time
 			event_index += 1
 		_stage_note_indices[role] = event_index
+
+# Retires notes that have scrolled well past the player. Two cursors, both
+# monotonic: gameplay clears a note once its head has aged out, drawing clears
+# it only once its tail has, so a long sustain stays visible for its whole
+# length instead of vanishing off the top of the highway mid-hold.
+func _advance_note_cursors() -> void:
+	var linger_ms := _approach_time_ms() + HIT_LINGER_MS
+	while first_visible_idx < notes.size():
+		var head_t: float = notes[first_visible_idx]["time_ms"]
+		if song_time_ms - head_t < linger_ms:
+			break
+		first_visible_idx += 1
+	while _first_drawn_idx < first_visible_idx:
+		var drawn_note = notes[_first_drawn_idx]
+		var tail_t: float = float(drawn_note["time_ms"]) \
+			+ float(drawn_note["duration_ms"])
+		if song_time_ms - tail_t < linger_ms:
+			break
+		_first_drawn_idx += 1
 
 func _update_sustains() -> void:
 	for lane in range(lane_count):
@@ -4825,7 +4849,7 @@ func _draw_flat_highway(vp: Vector2) -> void:
 	var margin := lw * FLAT_NOTE_MARGIN_RATIO
 	var sustain_lightning_previews := 0
 
-	for idx in range(first_visible_idx, notes.size()):
+	for idx in range(_first_drawn_idx, notes.size()):
 		var n = notes[idx]
 		var t: float = n["time_ms"]
 		var time_until := t - song_time_ms
@@ -5262,6 +5286,123 @@ func _draw_pixel_performer_fallback(role: String, height: float,
 #  GH HIGHWAY (pseudo-3D perspective view)
 # =====================================================================
 
+# Deck depths for a repeating feature locked to the scroll, so it travels at
+# exactly note speed. Spacing divides the repeat period, which keeps the pattern
+# continuous across the wrap instead of jumping once per cycle.
+func _deck_feature_depths(target_count: int) -> PackedFloat32Array:
+	var depths := PackedFloat32Array()
+	if target_count <= 0 or _arena_highway_v_span <= 0.0:
+		return depths
+	var period := _arena_highway_period()
+	var ticks := maxi(1, int(round(
+		float(target_count) * period / maxf(_arena_highway_v_span, 0.001))))
+	var spacing := period / float(ticks)
+	var depth := fposmod(_arena_highway_scroll_phase(song_time_ms), spacing)
+	while depth <= _arena_highway_v_span:
+		depths.append(depth)
+		depth += spacing
+	return depths
+
+# How many chevrons the current streak has earned. The highway is the score
+# meter: nothing until the first multiplier, then denser every tier.
+func _arena_chevron_count() -> int:
+	if _overdrive_active:
+		return 14
+	if combo >= 500:
+		return 12
+	if combo >= 300:
+		return 10
+	if combo >= 200:
+		return 8
+	if combo >= 100:
+		return 6
+	if combo >= 50:
+		return 5
+	if combo >= 25:
+		return 4
+	return 0
+
+# Flowing chevrons — the procedural replacement for the RB4 video overlay. Each
+# is two lines whose apex sits nearer the player than its wingtips, so the V
+# points down the highway and reads correctly in perspective.
+func _draw_deck_chevrons(
+		ls: float, total_w: float, energy: float, accent: Color) -> void:
+	var count := _arena_chevron_count()
+	if count <= 0:
+		return
+	var depths := _deck_feature_depths(count)
+	if depths.is_empty():
+		return
+	var center_bottom := ls + total_w * 0.5
+	var wing_depth := _arena_highway_v_span / float(maxi(count, 1)) * 0.45
+	var beat := 0.82 + clampf(_beat_pulse, 0.0, 1.0) * 0.18
+	var tint := (
+		Color(0.80, 0.94, 1.0) if _overdrive_active else accent.lightened(0.42))
+	var base_alpha := (0.34 if _overdrive_active else 0.12 + energy * 0.24)
+	for depth_index in range(depths.size()):
+		var depth := float(depths[depth_index])
+		var apex_z := _arena_highway_z_at(depth)
+		var wing_z := _arena_highway_z_at(maxf(depth - wing_depth, 0.0))
+		var apex := Vector2(_gh_x(center_bottom, apex_z), _gh_y(apex_z))
+		var left := Vector2(_gh_x(ls, wing_z), _gh_y(wing_z))
+		var right := Vector2(_gh_x(ls + total_w, wing_z), _gh_y(wing_z))
+		# Faint at the horizon, strongest as it arrives — sells the approach.
+		var travel := depth / maxf(_arena_highway_v_span, 0.001)
+		var alpha := base_alpha * beat * (0.18 + travel * 0.82)
+		if alpha <= 0.004:
+			continue
+		var width := (1.0 + travel * 2.4) * (1.35 if _overdrive_active else 1.0)
+		var col := Color(tint.r, tint.g, tint.b, alpha)
+		draw_line(left, apex, col, width, true)
+		draw_line(apex, right, col, width, true)
+
+# Venue lighting: beams thrown from the rig behind the stage, sweeping across
+# the deck. They pivot near the horizon and widen toward the player, which is
+# what sells the highway as a lit stage floor rather than a flat texture.
+func _draw_deck_light_beams(
+		ls: float, total_w: float, energy: float, accent: Color,
+		horizon_y: float, viewport_bottom: float) -> void:
+	var reveal := (1.0 if _overdrive_active else smoothstep(0.05, 0.55, energy))
+	if reveal <= 0.01:
+		return
+	var beam_count := 2
+	match _effective_vfx_quality():
+		"full":
+			beam_count = 4
+		"balanced":
+			beam_count = 3
+	var center_bottom := ls + total_w * 0.5
+	# Pivot exactly on the horizon: beams must land on the deck, never spill up
+	# into the sky above it.
+	var pivot_y := horizon_y
+	var sweep_time := _frame_time_sec * 0.23
+	var beat := 0.72 + clampf(_beat_pulse, 0.0, 1.0) * 0.28
+	var tint := (
+		Color(0.66, 0.86, 1.0) if _overdrive_active else accent.lightened(0.30))
+	for beam_index in range(beam_count):
+		var phase := sweep_time + TAU * float(beam_index) / float(beam_count)
+		# Each beam drifts across the deck on its own slow cycle.
+		var aim := sin(phase) * 0.72 + sin(phase * 0.37 + 1.1) * 0.22
+		var foot := center_bottom + aim * total_w * 0.78
+		var half := total_w * (0.15 + 0.05 * sin(phase * 0.61))
+		var alpha := (0.030 + energy * 0.035) * beat * reveal
+		if _overdrive_active:
+			alpha = maxf(alpha, 0.052 * beat)
+		if alpha <= 0.003:
+			continue
+		var apex_x := center_bottom + aim * total_w * 0.10
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(apex_x - total_w * 0.012, pivot_y),
+				Vector2(apex_x + total_w * 0.012, pivot_y),
+				Vector2(foot + half, viewport_bottom),
+				Vector2(foot - half, viewport_bottom)]),
+			PackedColorArray([
+				Color(tint.r, tint.g, tint.b, alpha * 1.15),
+				Color(tint.r, tint.g, tint.b, alpha * 1.15),
+				Color(tint.r, tint.g, tint.b, 0.0),
+				Color(tint.r, tint.g, tint.b, 0.0)]))
+
 func _draw_arena_highway_surface(
 		vp: Vector2, ls: float, total_w: float, z_far: float, z_bot: float,
 		horizon_y: float) -> void:
@@ -5280,30 +5421,13 @@ func _draw_arena_highway_surface(
 
 	var energy := _arena_combo_energy_display
 	var accent := _arena_accent_color()
-	var effect_alpha := _arena_effect_alpha()
-	if combo >= 500:
-		effect_alpha *= 0.62
-	if _arena_effect_texture and effect_alpha > 0.001 and strip_count > 0:
-		var frame_position := _arena_effect_frame_position(song_time_ms)
-		var frame_a := int(floor(frame_position))
-		var frame_b := (frame_a + 1) % ARENA_EFFECT_FRAME_COUNT
-		var frame_blend: float = frame_position - floor(frame_position)
-		_update_arena_effect_strip_uvs(frame_a, frame_b)
-		for strip_index in range(strip_count):
-			var alpha_a: float = effect_alpha * (1.0 - frame_blend)
-			if alpha_a > 0.001:
-				draw_colored_polygon(
-					_arena_highway_strips[strip_index],
-					Color(1.0, 1.0, 1.0, alpha_a),
-					_arena_effect_strip_uvs_a[strip_index],
-					_arena_effect_texture)
-			var alpha_b: float = effect_alpha * frame_blend
-			if alpha_b > 0.001:
-				draw_colored_polygon(
-					_arena_highway_strips[strip_index],
-					Color(1.0, 1.0, 1.0, alpha_b),
-					_arena_effect_strip_uvs_b[strip_index],
-					_arena_effect_texture)
+
+	# Overdrive floods the deck before anything else is layered on, so the whole
+	# surface shifts colour rather than getting a rim of blue.
+	if _overdrive_active:
+		var flood := 0.10 + clampf(_beat_pulse, 0.0, 1.0) * 0.05
+		draw_colored_polygon(
+			_gh_surface_points, Color(0.36, 0.72, 1.0, flood))
 
 	if combo >= 200 and combo < 500 and _vfx_heavy_enabled():
 		_draw_combo_streaks_gh(_gh_surface_points, 0.42, true)
@@ -5316,31 +5440,35 @@ func _draw_arena_highway_surface(
 			0.28 if lane_index % 2 == 0 else 0.18)
 		draw_colored_polygon(_arena_lane_panels[lane_index], recess)
 
-	if energy > 0.01:
-		for lane_index in range(_arena_lane_cores.size()):
-			var lane_phase := 0.72 + 0.28 * sin(
-				song_time_ms * 0.003 + lane_index * 0.92)
-			draw_colored_polygon(
-				_arena_lane_cores[lane_index],
-				Color(
-					accent.r, accent.g, accent.b,
-					energy * (0.020 + 0.045 * lane_phase)))
+	# Lane charge. The streak lights the whole set, and the lane you are actually
+	# playing burns brighter on top of that, so the highway reports both your
+	# multiplier and your hands.
+	var charge_beat := 0.78 + clampf(_beat_pulse, 0.0, 1.0) * 0.22
+	var charge_tint := (
+		Color(0.72, 0.90, 1.0) if _overdrive_active else accent)
+	for lane_index in range(_arena_lane_cores.size()):
+		var lane_heat := 0.0
+		if lane_index < _lane_streak.size():
+			lane_heat = clampf(float(_lane_streak[lane_index]), 0.0, 1.0)
+		var charge := energy * charge_beat + lane_heat * 0.55
+		if _overdrive_active:
+			charge = maxf(charge, 0.62 * charge_beat)
+		if charge <= 0.01:
+			continue
+		draw_colored_polygon(
+			_arena_lane_cores[lane_index],
+			Color(
+				charge_tint.r, charge_tint.g, charge_tint.b,
+				clampf(charge * 0.16, 0.0, 0.20)))
 
 	# Ribs are surface detail, so they have to travel at exactly deck speed.
 	# They used to run on their own 0.52x clock, which put them at ~57% of note
 	# speed — they visibly slid backwards through the art and the beat lines.
 	# Spacing divides the repeat period so they stay continuous across its wrap.
-	var rib_count := _arena_rib_count()
-	var rib_period := _arena_highway_period()
-	var rib_ticks := maxi(1, int(round(
-		float(rib_count) * rib_period / maxf(_arena_highway_v_span, 0.001))))
-	var rib_spacing := rib_period / float(rib_ticks)
-	var rib_depth := fposmod(
-		_arena_highway_scroll_phase(song_time_ms), rib_spacing)
-	while rib_depth <= _arena_highway_v_span:
-		var z := _arena_highway_z_at(rib_depth)
+	for rib_depth in _deck_feature_depths(_arena_rib_count()):
+		var z := _arena_highway_z_at(float(rib_depth))
 		var y := _gh_y(z)
-		var travel := rib_depth / maxf(_arena_highway_v_span, 0.001)
+		var travel := float(rib_depth) / maxf(_arena_highway_v_span, 0.001)
 		var left := Vector2(_gh_x(ls, z), y)
 		var right := Vector2(_gh_x(ls + total_w, z), y)
 		var rib_alpha := (0.035 + energy * 0.105) * (0.35 + travel * 0.65)
@@ -5348,7 +5476,10 @@ func _draw_arena_highway_surface(
 			left, right,
 			Color(accent.r, accent.g, accent.b, rib_alpha),
 			1.0 + energy * 1.2)
-		rib_depth += rib_spacing
+
+	_draw_deck_chevrons(ls, total_w, energy, accent)
+	_draw_deck_light_beams(
+		ls, total_w, energy, accent, horizon_y, _frame_viewport_size.y)
 
 	# A restrained horizon crown makes the surface feel bolted into the stage.
 	var top_left := _gh_surface_points[0]
@@ -5395,6 +5526,39 @@ func _draw_arena_highway_rails(
 				far_point.lerp(near_point, segment_end),
 				Color(accent.r, accent.g, accent.b, 0.50 + energy * 0.42),
 				4.0)
+
+# A sustain reads as one glowing rod: soft outer bloom, solid body, near-white
+# core, all narrowing toward the horizon with the rest of the deck. `heat` is
+# how hard it is being held — it whitens the core and widens the bloom, so the
+# rod visibly lights up under the finger instead of just sitting there.
+func _draw_sustain_stick(
+		top: Vector2, bottom: Vector2, top_half_w: float, bottom_half_w: float,
+		base_color: Color, alpha: float, heat: float) -> void:
+	if alpha <= 0.01:
+		return
+	var body := base_color.lightened(0.12 + 0.28 * heat)
+	var core := base_color.lightened(0.55 + 0.42 * heat)
+	# width scale, alpha, colour — outer bloom first so the core lands on top.
+	for layer in [
+			[2.55 + 0.55 * heat, 0.13 + 0.11 * heat, base_color],
+			[1.0, 0.50 + 0.30 * heat, body],
+			[0.34, 0.82 + 0.18 * heat, core]]:
+		var width_scale: float = layer[0]
+		var layer_alpha: float = float(layer[1]) * alpha
+		var col: Color = layer[2]
+		var tw := top_half_w * width_scale
+		var bw := bottom_half_w * width_scale
+		# Dimmer at the far end so the rod reads as receding, not as a decal.
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(top.x - tw, top.y), Vector2(top.x + tw, top.y),
+				Vector2(bottom.x + bw, bottom.y),
+				Vector2(bottom.x - bw, bottom.y)]),
+			PackedColorArray([
+				Color(col.r, col.g, col.b, layer_alpha * 0.45),
+				Color(col.r, col.g, col.b, layer_alpha * 0.45),
+				Color(col.r, col.g, col.b, layer_alpha),
+				Color(col.r, col.g, col.b, layer_alpha)]))
 
 func _draw_gh_highway(vp: Vector2) -> void:
 	var lw := _lane_width()
@@ -5556,9 +5720,9 @@ func _draw_gh_highway(vp: Vector2) -> void:
 	# --- Notes (fret caps with perspective) ---
 	# Draw far-to-near. The previous order let farther frets paint over closer
 	# notes, which made dense consecutive streams look like one opaque stack.
-	var last_visible_note := first_visible_idx - 1
+	var last_visible_note := _first_drawn_idx - 1
 	var sustain_lightning_candidates := 0
-	for scan_idx in range(first_visible_idx, notes.size()):
+	for scan_idx in range(_first_drawn_idx, notes.size()):
 		if float(notes[scan_idx]["time_ms"]) - song_time_ms > app_ms:
 			break
 		last_visible_note = scan_idx
@@ -5572,7 +5736,7 @@ func _draw_gh_highway(vp: Vector2) -> void:
 	var sustain_lightning_previews := 0
 	var sustain_lightning_previews_to_skip := maxi(
 		0, sustain_lightning_candidates - _sustain_lightning_preview_cap())
-	for idx in range(last_visible_note, first_visible_idx - 1, -1):
+	for idx in range(last_visible_note, _first_drawn_idx - 1, -1):
 		var n = notes[idx]
 		var t: float = n["time_ms"]
 		var time_until := t - song_time_ms
@@ -5593,6 +5757,18 @@ func _draw_gh_highway(vp: Vector2) -> void:
 		var gr := lw * GH_NOTE_FRET_RADIUS_RATIO / z
 		var is_hit := (state == 1)
 		var is_holding := (state == 3)
+		var dur_ms: float = n["duration_ms"]
+
+		# Cull scrolled-past notes before drawing anything. The tail sits above
+		# the head, so a long note is still on screen after its head has gone —
+		# test the top of the trail, not the gem.
+		if is_hit:
+			var trail_top_y := gy
+			if dur_ms > 0.0:
+				trail_top_y = _gh_y(
+					minf(_gh_z_for((t + dur_ms) - song_time_ms), z_far))
+			if trail_top_y > vp.y + gr * 2.0:
+				continue
 
 		# Fade in near the horizon
 		var ratio := 1.0 - (time_until / app_ms)
@@ -5603,10 +5779,6 @@ func _draw_gh_highway(vp: Vector2) -> void:
 			var od_pulse := 0.58 + 0.24 * sin(_frame_time_msec * 0.008 + lane)
 			draw_arc(Vector2(gx, gy), gr * 1.24, 0.0, TAU, 28,
 				Color(0.72, 0.92, 1.0, od_pulse * note_alpha), maxf(2.0, gr * 0.10), true)
-		if is_hit and gy > vp.y + gr * 2.0:
-			continue
-
-		var dur_ms: float = n["duration_ms"]
 
 		# --- Sustain trail ---
 		if dur_ms > 0:
@@ -5614,66 +5786,41 @@ func _draw_gh_highway(vp: Vector2) -> void:
 			var tz := minf(_gh_z_for(tail_until), z_far)
 			var t_cx := _gh_x(lane_cx_bottom, tz)
 			var t_y := _gh_y(tz)
-			var t_w := lw * 0.20 / tz
+			var t_w := lw * SUSTAIN_ROD_HALF_WIDTH / tz
 			var cc: Color = lane_colors[lane]
 
 			if is_holding:
-				# Trail tapers from the tail down to the fret; head locked at hit line
-				var h_w := lw * 0.20
-				var pulse := 0.15 * sin(_frame_time_msec * 0.008)
-				draw_polygon(PackedVector2Array([
-					Vector2(t_cx - t_w, t_y), Vector2(t_cx + t_w, t_y),
-					Vector2(lane_cx_bottom + h_w, hit_y), Vector2(lane_cx_bottom - h_w, hit_y)]),
-					PackedColorArray([
-						Color(cc.r, cc.g, cc.b, 0.12), Color(cc.r, cc.g, cc.b, 0.12),
-						Color(cc.r, cc.g, cc.b, 0.7 + pulse), Color(cc.r, cc.g, cc.b, 0.7 + pulse)]))
+				# Head is locked at the hit line while the rod burns down into it.
+				var hold_pulse := 0.5 + 0.5 * sin(
+					_frame_time_msec * 0.012 + lane * 0.7)
+				var head_center := Vector2(lane_cx_bottom, hit_y)
+				_draw_sustain_stick(
+					Vector2(t_cx, t_y), head_center,
+					t_w, lw * SUSTAIN_ROD_HALF_WIDTH, cc, 1.0,
+					0.70 + 0.30 * hold_pulse)
 				_draw_sustain_lightning_column(
-					Vector2(t_cx, t_y), Vector2(lane_cx_bottom, hit_y),
-					cc.lightened(0.24),
+					Vector2(t_cx, t_y), head_center,
+					cc.lightened(0.30),
 					_sustain_lightning_intensity(
 						dur_ms, time_until, app_ms, true),
 					idx, lane, true)
-				# Hold aura — pulsing glow + expanding ring around the head
-				var hold_pulse := 0.5 + 0.5 * sin(_frame_time_msec * 0.012)
-				var ring_center := Vector2(lane_cx_bottom, hit_y)
-				draw_circle(ring_center, lw * (0.38 + 0.04 * hold_pulse),
-					Color(cc.r, cc.g, cc.b, 0.08 + 0.05 * hold_pulse))
-				# Keep the flame behind the fret so it appears to rise from the held
-				# note instead of being pasted over the circular button.
+				# Tight contact flare where the rod meets the fret. The old hold
+				# stacked smoke, two animated rings and orbiting sparks here,
+				# which buried the rod under clutter.
+				draw_circle(head_center, lw * (0.29 + 0.05 * hold_pulse),
+					Color(cc.r, cc.g, cc.b, 0.10 + 0.08 * hold_pulse))
 				if combo >= 100:
-					var burn_alpha := 0.88 if combo >= 300 else 0.78
-					if _vfx_heavy_enabled():
-						_draw_fx_loop_smooth("sustain_smoke",
-							ring_center + Vector2(0.0, -lw * 0.40), lw * 0.70,
-							Color(0.82, 0.79, 0.75, 0.26), 0.58, lane * 0.37 + 0.20)
 					_draw_fx_loop_smooth("sustain_fire",
-						ring_center + Vector2(0.0, -lw * 0.24), lw * 0.58,
-						Color(1.0, 1.0, 1.0, burn_alpha), 0.82, lane * 0.41)
-				_draw_gh_fret(ring_center, lw * GH_NOTE_FRET_RADIUS_RATIO, cc, 1.0, false)
-				# The Brackeys ring is drawn after the fret, so its animated edge is
-				# always visible instead of being buried behind the large button.
-				var ring_h := lw * (0.78 + 0.035 * hold_pulse)
-				var ring_color := cc.lightened(0.28)
-				_draw_fx_loop_smooth("hold_ring", ring_center, ring_h,
-					Color(ring_color.r, ring_color.g, ring_color.b, 0.98), 0.88, lane * 0.31)
-				_draw_fx_loop_smooth("hold_ring", ring_center, ring_h * 0.93,
-					Color(1.0, 1.0, 1.0, 0.32), 0.88, lane * 0.31)
-				var orbit_time := _frame_time_msec * 0.0048 + lane * 0.9
-				var spark_count := 3 if _effective_vfx_quality() == "performance" else 5
-				for spark_i in range(spark_count):
-					var spark_angle := orbit_time + TAU * float(spark_i) / float(spark_count)
-					var spark_pos := ring_center + Vector2.from_angle(spark_angle) * lw * 0.405
-					draw_circle(spark_pos, maxf(2.0, lw * 0.018), Color(1, 1, 1, 0.95))
+						head_center + Vector2(0.0, -lw * 0.22), lw * 0.46,
+						Color(1.0, 1.0, 1.0, 0.58), 0.82, lane * 0.41)
+				_draw_gh_fret(
+					head_center, lw * GH_NOTE_FRET_RADIUS_RATIO, cc, 1.0, false)
 				continue
 			else:
-				var head_w := lw * 0.20 / z
-				var trail_a := 0.15 if is_hit else 0.35
-				draw_polygon(PackedVector2Array([
-					Vector2(t_cx - t_w, t_y), Vector2(t_cx + t_w, t_y),
-					Vector2(gx + head_w, gy), Vector2(gx - head_w, gy)]),
-					PackedColorArray([
-						Color(cc.r, cc.g, cc.b, trail_a * 0.35 * note_alpha), Color(cc.r, cc.g, cc.b, trail_a * 0.35 * note_alpha),
-						Color(cc.r, cc.g, cc.b, trail_a * note_alpha), Color(cc.r, cc.g, cc.b, trail_a * note_alpha)]))
+				var head_w := lw * SUSTAIN_ROD_HALF_WIDTH / z
+				_draw_sustain_stick(
+					Vector2(t_cx, t_y), Vector2(gx, gy), t_w, head_w, cc,
+					(0.32 if is_hit else 0.90) * note_alpha, 0.0)
 				var preview_intensity := _sustain_lightning_intensity(
 					dur_ms, time_until, app_ms, false, is_hit)
 				if not is_hit and dur_ms >= SUSTAIN_LIGHTNING_MIN_DURATION_MS:

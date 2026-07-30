@@ -67,9 +67,10 @@ func _initialize() -> void:
 	game._configure_guitar_visuals()
 	assert(game._arena_mode)
 	assert(game._arena_highway_texture != null)
-	assert(game._arena_effect_texture != null)
 	assert(game._arena_highway_texture.resource_path == game.ARENA_HIGHWAY_TEXTURE_PATH)
-	assert(game._arena_effect_texture.resource_path == game.ARENA_EFFECT_ATLAS_PATH)
+	# The RB4 video atlas is gone: it stored a 512x1024 source at 96x192 and
+	# magnified it ~11x back onto the deck. Combo lighting is procedural now.
+	assert(game._arena_effect_texture == null)
 	# The shipped WoR deck tiles seamlessly, so it must wrap rather than mirror
 	# (mirroring flipped every other copy of the art upside down).
 	assert(not game._arena_highway_mirror)
@@ -80,34 +81,23 @@ func _initialize() -> void:
 	assert(game._arena_highway_texture.get_image().has_mipmaps())
 	# 512x1024 art is two highway widths long, so it tiles 3.0 / 2.0 times.
 	assert(is_equal_approx(game._arena_highway_repeat, 1.5))
-	assert(game._arena_effect_frame(0.0) == 0)
-	assert(game._arena_effect_frame(1000.0) >= 0)
-	assert(game._arena_effect_frame(1000.0) < game.ARENA_EFFECT_FRAME_COUNT)
-	# 4.8fps ghosted through the crossfade, so the atlas is played faster than
-	# its source duration; the loop is the frame count over the actual rate.
-	assert(game.ARENA_EFFECT_FPS > 8.0)
-	var effect_loop_ms: float = float(game.ARENA_EFFECT_FRAME_COUNT) \
-		/ game.ARENA_EFFECT_FPS * 1000.0
-	assert(game._arena_effect_frame(effect_loop_ms - 1.0) \
-		== game.ARENA_EFFECT_FRAME_COUNT - 1)
-	assert(game._arena_effect_frame(effect_loop_ms) == 0)
-	assert(game._arena_effect_uvs_for_frame(0) \
-		!= game._arena_effect_uvs_for_frame(1))
-	assert(game._arena_effect_uvs_for_frame(15) \
-		!= game._arena_effect_uvs_for_frame(16))
-	var last_effect_uvs: PackedVector2Array = game._arena_effect_uvs_for_frame(
-		game.ARENA_EFFECT_FRAME_COUNT - 1)
-	assert(last_effect_uvs.size() == 4)
-	for effect_uv in last_effect_uvs:
-		assert(effect_uv.x >= 0.0 and effect_uv.x <= 1.0)
-		assert(effect_uv.y >= 0.0 and effect_uv.y <= 1.0)
-	game._arena_combo_energy_display = 0.0
-	assert(is_equal_approx(game._arena_effect_alpha(), 0.0))
-	game._arena_combo_energy_display = 0.90
-	# The overlay is alpha-blended over the deck art, so it has to stay low
-	# enough to tint the surface rather than grey it out.
-	assert(game._arena_effect_alpha() > 0.10)
-	assert(game._arena_effect_alpha() <= 0.16)
+	# Combo lighting: the highway is the score meter, so chevron density has to
+	# climb with the streak and never appear before the first multiplier.
+	game._overdrive_active = false
+	game.combo = 0
+	assert(game._arena_chevron_count() == 0)
+	var previous_chevrons := -1
+	for streak in [25, 50, 100, 200, 300, 500]:
+		game.combo = streak
+		var chevrons: int = game._arena_chevron_count()
+		assert(chevrons > previous_chevrons)
+		previous_chevrons = chevrons
+	game.combo = 500
+	var full_streak_chevrons: int = game._arena_chevron_count()
+	game._overdrive_active = true
+	assert(game._arena_chevron_count() > full_streak_chevrons)
+	game._overdrive_active = false
+	game.combo = 0
 	# The deck art itself is lifted from the near-black sheets these rips ship
 	# as, but must stay clearly below the gems.
 	assert(game._arena_highway_gain > 1.5)
@@ -132,6 +122,7 @@ func _initialize() -> void:
 	assert(is_equal_approx(game._arena_highway_base_v(game._gh_z_far()), 0.0))
 	_check_arena_highway_deck(game)
 	_check_arena_highway_variations(game)
+	_check_long_sustain_visibility(game)
 	# Restore the shipped deck for the rest of the suite.
 	game._configure_guitar_visuals()
 	for stage_role in ["guitarist", "drummer", "bassist", "vocalist"]:
@@ -335,6 +326,54 @@ func _initialize() -> void:
 
 	print("Gameplay feature tests passed: Arena visuals, sustain lightning, stage sync, crowd pools, audio buses, miss SFX, OD/solo parsing")
 	quit(0)
+
+# A sustain longer than the approach plus linger window used to be culled from
+# the draw loops while it was still being held, because both cursors keyed on
+# the note's head time. It kept scoring — it just vanished off the highway.
+func _check_long_sustain_visibility(game) -> void:
+	game._cached_approach_ms = 1400.0
+	var linger: float = game._approach_time_ms() + game.HIT_LINGER_MS
+	# One long sustain, then a short note well after it ends.
+	game.notes = [
+		{"time_ms": 1000.0, "lane": 0, "duration_ms": 8000.0},
+		{"time_ms": 30000.0, "lane": 1, "duration_ms": 0.0},
+	]
+	game.note_state = PackedByteArray()
+	game.note_state.resize(game.notes.size())
+	game.first_visible_idx = 0
+	game._first_drawn_idx = 0
+
+	# Mid-hold: the head has long aged out, the tail has not.
+	game.song_time_ms = 1000.0 + linger + 500.0
+	game._advance_note_cursors()
+	assert(game.first_visible_idx == 1)
+	assert(game._first_drawn_idx == 0)
+
+	# Still holding near the very end of the sustain.
+	game.song_time_ms = 8900.0
+	game._advance_note_cursors()
+	assert(game._first_drawn_idx == 0)
+
+	# Once the tail itself has aged out, drawing may retire it too.
+	game.song_time_ms = 9000.0 + linger + 1.0
+	game._advance_note_cursors()
+	assert(game._first_drawn_idx == 1)
+
+	# The draw cursor never runs ahead of the gameplay cursor.
+	assert(game._first_drawn_idx <= game.first_visible_idx)
+
+	# A note with no sustain retires on the same schedule as before.
+	game.notes = [{"time_ms": 0.0, "lane": 0, "duration_ms": 0.0}]
+	game.note_state = PackedByteArray()
+	game.note_state.resize(1)
+	game.first_visible_idx = 0
+	game._first_drawn_idx = 0
+	game.song_time_ms = linger - 1.0
+	game._advance_note_cursors()
+	assert(game._first_drawn_idx == 0)
+	game.song_time_ms = linger + 1.0
+	game._advance_note_cursors()
+	assert(game.first_visible_idx == 1 and game._first_drawn_idx == 1)
 
 # Imported art comes in every shape (256x512 GH1 rips, 512x1024 WoR sheets,
 # whatever a player picks). The tile count has to follow the aspect ratio, and
