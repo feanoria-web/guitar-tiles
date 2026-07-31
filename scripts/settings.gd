@@ -17,6 +17,9 @@ static var guitar_highway_theme: String = "neon" # "neon", "classic" or "midnigh
 static var guitar_presentation_mode: String = "classic" # "classic" or "arena"
 static var arena_fret_skin: String = "blade" # "blade", "anvil" or "coil"
 static var arena_custom_highway_enabled: bool = false
+# Unlocked by a hidden tap combination on the tester-thanks card. Single player
+# only — the game refuses to honour it while a multiplayer match is live.
+static var unlimited_overdrive: bool = false
 static var pixel_stage_enabled: bool = true
 static var pixel_stage_intensity: String = "live" # "subtle" or "live"
 
@@ -63,6 +66,8 @@ static func load_settings() -> void:
 			var saved_fret_skin := String(data["arena_fret_skin"])
 			if saved_fret_skin in ["blade", "anvil", "coil"]:
 				arena_fret_skin = saved_fret_skin
+		if data.has("unlimited_overdrive"):
+			unlimited_overdrive = bool(data["unlimited_overdrive"])
 		if data.has("arena_custom_highway_enabled"):
 			arena_custom_highway_enabled = bool(
 				data["arena_custom_highway_enabled"])
@@ -89,6 +94,7 @@ static func save_settings() -> void:
 		"guitar_presentation_mode": guitar_presentation_mode,
 		"arena_fret_skin": arena_fret_skin,
 		"arena_custom_highway_enabled": arena_custom_highway_enabled,
+		"unlimited_overdrive": unlimited_overdrive,
 		"pixel_stage_enabled": pixel_stage_enabled,
 		"pixel_stage_intensity": pixel_stage_intensity,
 	}

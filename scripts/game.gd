@@ -2725,12 +2725,20 @@ func _register_gameplay_miss(note_idx: int) -> void:
 	if solo_idx >= 0 and solo_idx < _solo_states.size():
 		_solo_states[solo_idx]["miss"] = int(_solo_states[solo_idx]["miss"]) + 1
 
+# The hidden unlock is single player only. A live or loading multiplayer match
+# always wins, so it can never be used against other players.
+func _unlimited_overdrive_active() -> bool:
+	if BattleSession.match_active or BattleSession.match_loading:
+		return false
+	return Settings.unlimited_overdrive
+
 func _activate_overdrive() -> void:
 	if not song_started or _paused:
 		return
 	if _overdrive_active:
 		return
-	if _overdrive_energy < OVERDRIVE_ACTIVATION_MIN:
+	if _overdrive_energy < OVERDRIVE_ACTIVATION_MIN \
+			and not _unlimited_overdrive_active():
 		return
 	_overdrive_active = true
 	_show_milestone(I18n.t("overdrive_active"))
@@ -2763,9 +2771,13 @@ func _update_overdrive_ui() -> void:
 
 func _update_gameplay_sections(delta: float) -> void:
 	if _overdrive_active:
-		_overdrive_energy = maxf(0.0, _overdrive_energy - OVERDRIVE_DRAIN_PER_SEC * delta)
-		if _overdrive_energy <= 0.0:
-			_overdrive_active = false
+		if _unlimited_overdrive_active():
+			_overdrive_energy = 1.0
+		else:
+			_overdrive_energy = maxf(
+				0.0, _overdrive_energy - OVERDRIVE_DRAIN_PER_SEC * delta)
+			if _overdrive_energy <= 0.0:
+				_overdrive_active = false
 		_update_overdrive_ui()
 
 	var new_solo_idx := -1
@@ -5527,6 +5539,46 @@ func _draw_arena_highway_rails(
 				Color(accent.r, accent.g, accent.b, 0.50 + energy * 0.42),
 				4.0)
 
+# A held sustain is a light source, not just a bright shape. This throws its
+# spill onto the deck around it — wide, very soft, widest at the fret where the
+# rod burns into the board and falling off toward the horizon. Drawn before the
+# rod so the rod always sits on top of its own light.
+func _draw_sustain_light_spill(
+		top: Vector2, bottom: Vector2, top_half_w: float, bottom_half_w: float,
+		color: Color, heat: float) -> void:
+	var quality := _effective_vfx_quality()
+	if quality == "performance":
+		return
+	var spill := 0.11 + 0.10 * heat
+	# widest layer first; it reaches into the neighbouring lanes.
+	var layers := (
+		[[7.0, 0.55], [4.2, 0.80], [2.4, 1.0]] if quality == "full"
+		else [[5.0, 0.70], [2.6, 1.0]])
+	for layer in layers:
+		var width_scale: float = layer[0]
+		var layer_alpha: float = spill * float(layer[1])
+		var tw := top_half_w * width_scale
+		var bw := bottom_half_w * width_scale
+		# Fades to nothing at the far end, so the light looks cast rather than
+		# painted along the whole rod.
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(top.x - tw, top.y), Vector2(top.x + tw, top.y),
+				Vector2(bottom.x + bw, bottom.y),
+				Vector2(bottom.x - bw, bottom.y)]),
+			PackedColorArray([
+				Color(color.r, color.g, color.b, 0.0),
+				Color(color.r, color.g, color.b, 0.0),
+				Color(color.r, color.g, color.b, layer_alpha),
+				Color(color.r, color.g, color.b, layer_alpha)]))
+	# Pool of light where the rod meets the board.
+	var pool := bottom_half_w * (7.5 if quality == "full" else 5.5)
+	for ring in range(3):
+		var ring_t := 1.0 - float(ring) / 3.0
+		draw_circle(
+			bottom, pool * ring_t,
+			Color(color.r, color.g, color.b, (0.055 + 0.055 * heat) * ring_t))
+
 # A sustain reads as one glowing rod: soft outer bloom, solid body, near-white
 # core, all narrowing toward the horizon with the rest of the deck. `heat` is
 # how hard it is being held — it whitens the core and widens the bloom, so the
@@ -5794,6 +5846,10 @@ func _draw_gh_highway(vp: Vector2) -> void:
 				var hold_pulse := 0.5 + 0.5 * sin(
 					_frame_time_msec * 0.012 + lane * 0.7)
 				var head_center := Vector2(lane_cx_bottom, hit_y)
+				_draw_sustain_light_spill(
+					Vector2(t_cx, t_y), head_center,
+					t_w, lw * SUSTAIN_ROD_HALF_WIDTH, cc,
+					0.70 + 0.30 * hold_pulse)
 				_draw_sustain_stick(
 					Vector2(t_cx, t_y), head_center,
 					t_w, lw * SUSTAIN_ROD_HALF_WIDTH, cc, 1.0,
@@ -6380,6 +6436,10 @@ func _on_multiplayer_band_failed() -> void:
 
 # Returns true when an existing best score was beaten.
 func _save_score() -> bool:
+	# A run with unlimited overdrive would permanently outrank every honest one,
+	# so it is played but never recorded.
+	if _unlimited_overdrive_active():
+		return false
 	var scores_path := "user://scores.json"
 	var scores := {}
 	if FileAccess.file_exists(scores_path):

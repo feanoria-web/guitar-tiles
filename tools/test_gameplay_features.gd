@@ -123,6 +123,7 @@ func _initialize() -> void:
 	_check_arena_highway_deck(game)
 	_check_arena_highway_variations(game)
 	_check_long_sustain_visibility(game)
+	_check_unlimited_overdrive_gating(game)
 	# Restore the shipped deck for the rest of the suite.
 	game._configure_guitar_visuals()
 	for stage_role in ["guitarist", "drummer", "bassist", "vocalist"]:
@@ -326,6 +327,37 @@ func _initialize() -> void:
 
 	print("Gameplay feature tests passed: Arena visuals, sustain lightning, stage sync, crowd pools, audio buses, miss SFX, OD/solo parsing")
 	quit(0)
+
+# The hidden unlock must never reach multiplayer, and must never write a score.
+func _check_unlimited_overdrive_gating(game) -> void:
+	# The autoload name does not resolve at compile time in a --script run, so
+	# reach the singleton through the tree instead.
+	var battle = root.get_node_or_null("BattleSession")
+	assert(battle != null)
+	var previous_setting := Settings.unlimited_overdrive
+	var previous_active: bool = battle.match_active
+	var previous_loading: bool = battle.match_loading
+
+	Settings.unlimited_overdrive = false
+	battle.match_active = false
+	battle.match_loading = false
+	assert(not game._unlimited_overdrive_active())
+
+	Settings.unlimited_overdrive = true
+	assert(game._unlimited_overdrive_active())
+	# A cheated run is playable but must not be recorded.
+	assert(not game._save_score())
+
+	# Either multiplayer state overrides the unlock outright.
+	battle.match_active = true
+	assert(not game._unlimited_overdrive_active())
+	battle.match_active = false
+	battle.match_loading = true
+	assert(not game._unlimited_overdrive_active())
+
+	battle.match_active = previous_active
+	battle.match_loading = previous_loading
+	Settings.unlimited_overdrive = previous_setting
 
 # A sustain longer than the approach plus linger window used to be culled from
 # the draw loops while it was still being held, because both cursors keyed on

@@ -26,6 +26,8 @@ const USER_SONGS_DIR := "user://songs"
 const HIDDEN_BUNDLED_SONG_PATHS := ["res://notes.chart"]
 const MIX_CACHE_DIR := "user://cache"
 const THUMB_CACHE_DIR := "user://menu_thumbnails"
+const SECRET_TAP_COUNT := 5
+const SECRET_TAP_WINDOW_MS := 1600
 const CUSTOM_HIGHWAY_MAX_BYTES := 16 * 1024 * 1024
 const CUSTOM_HIGHWAY_MAX_PIXELS := 16 * 1024 * 1024
 const CUSTOM_HIGHWAY_MAX_WIDTH := 1024
@@ -74,6 +76,10 @@ var _guitar_presentation_btns: Dictionary = {}
 var _arena_fret_btns: Dictionary = {}
 var _guitar_theme_btns: Dictionary = {}
 var _arena_highway_status_label: Label = null
+var _last_tutorial_body: Label = null
+var _secret_body_label: Label = null
+var _secret_tap_count: int = 0
+var _secret_tap_deadline_ms: int = 0
 var _native_picker_context: String = ""
 var _pixel_stage_btns: Dictionary = {}
 var _stage_intensity_btns: Dictionary = {}
@@ -566,9 +572,10 @@ func _open_song_tutorial() -> void:
 	legal.add_theme_color_override("font_color", UITheme.TEXT_FAINT)
 	steps.add_child(legal)
 
-	_add_tutorial_step(
+	var thanks_card := _add_tutorial_step(
 		steps, "★", I18n.t("song_tutorial_thanks_title"),
 		I18n.t("song_tutorial_thanks_body"), UITheme.ROCK_PARCHMENT)
+	_arm_secret_unlock(thanks_card)
 
 	_finish_tutorial(layout)
 
@@ -928,7 +935,7 @@ func _finish_tutorial(layout: VBoxContainer) -> void:
 	tween.tween_property(_tutorial_overlay, "modulate:a", 1.0, 0.18)
 
 func _add_tutorial_step(parent: VBoxContainer, number: String, title: String,
-		body: String, accent: Color) -> void:
+		body: String, accent: Color) -> PanelContainer:
 	var card := PanelContainer.new()
 	var card_style := UITheme.card_style(accent)
 	card_style.bg_color = CARD_BG
@@ -974,6 +981,49 @@ func _add_tutorial_step(parent: VBoxContainer, number: String, title: String,
 	step_body.add_theme_font_size_override("font_size", _fs(16))
 	step_body.add_theme_color_override("font_color", TEXT_DIM)
 	content.add_child(step_body)
+	_last_tutorial_body = step_body
+	return card
+
+# Hidden unlock: five taps on the tester-thanks card toggle unlimited overdrive.
+# The card stays MOUSE_FILTER_PASS so the event still reaches the scroll
+# container — anything else breaks touch scrolling on this panel.
+func _arm_secret_unlock(card: PanelContainer) -> void:
+	if not is_instance_valid(card):
+		return
+	_secret_body_label = _last_tutorial_body
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	for child in card.find_children("", "Control", true, false):
+		(child as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.gui_input.connect(_on_secret_card_input)
+
+func _on_secret_card_input(event: InputEvent) -> void:
+	var pressed := false
+	if event is InputEventMouseButton:
+		pressed = (event as InputEventMouseButton).pressed \
+			and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		pressed = (event as InputEventScreenTouch).pressed
+	if not pressed:
+		return
+	var now := Time.get_ticks_msec()
+	# Taps have to be deliberate and consecutive, so a slow scroll that happens
+	# to start on this card never trips it.
+	if now > _secret_tap_deadline_ms:
+		_secret_tap_count = 0
+	_secret_tap_count += 1
+	_secret_tap_deadline_ms = now + SECRET_TAP_WINDOW_MS
+	if _secret_tap_count < SECRET_TAP_COUNT:
+		return
+	_secret_tap_count = 0
+	Settings.unlimited_overdrive = not Settings.unlimited_overdrive
+	Settings.save_settings()
+	if is_instance_valid(_secret_body_label):
+		_secret_body_label.text = I18n.t(
+			"secret_overdrive_on" if Settings.unlimited_overdrive
+			else "secret_overdrive_off")
+		_secret_body_label.add_theme_color_override(
+			"font_color",
+			UITheme.NEON_CYAN if Settings.unlimited_overdrive else TEXT_DIM)
 
 func _close_song_tutorial() -> void:
 	if not is_instance_valid(_tutorial_overlay):
