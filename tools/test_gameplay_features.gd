@@ -98,6 +98,19 @@ func _initialize() -> void:
 	assert(game._arena_chevron_count() > full_streak_chevrons)
 	game._overdrive_active = false
 	game.combo = 0
+	# Losing the streak has to discharge the deck, scaled by what was lost, and
+	# clear itself quickly enough to be gone before the next note needs it.
+	game._arena_collapse = 0.0
+	game._spawn_combo_break_fx(0, 400)
+	var big_break: float = game._arena_collapse_strength
+	assert(is_equal_approx(game._arena_collapse, 1.0))
+	assert(is_equal_approx(big_break, 1.0))
+	game._spawn_combo_break_fx(0, 30)
+	assert(game._arena_collapse_strength < big_break)
+	assert(game._arena_collapse_strength >= 0.35)
+	# ~0.45s to fully discharge.
+	assert(1.0 / game.ARENA_COLLAPSE_DECAY < 0.6)
+	game._arena_collapse = 0.0
 	# The deck art itself is lifted from the near-black sheets these rips ship
 	# as, but must stay clearly below the gems.
 	assert(game._arena_highway_gain > 1.5)

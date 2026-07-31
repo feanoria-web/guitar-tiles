@@ -281,6 +281,10 @@ var _pause_layer: CanvasLayer = null
 var _gh_mode: bool = true
 var _arena_mode: bool = false
 var _arena_combo_energy_display: float = 0.0
+# Combo-break discharge: 1.0 the instant the streak dies, decaying to 0. Losing
+# the multiplier used to be visually silent, which made it feel free.
+var _arena_collapse: float = 0.0
+var _arena_collapse_strength: float = 0.0
 var _arena_highway_texture: Texture2D = null
 var _arena_effect_texture: Texture2D = null
 # Tiles of highway art between the horizon and the hit line. Doubles as the
@@ -317,6 +321,11 @@ const GH_HIT_PAD_MARGIN_RATIO := 0.04
 const SUSTAIN_LIGHTNING_MIN_DURATION_MS := 180.0
 # Half-width of the sustain rod at the hit line, as a fraction of lane width.
 const SUSTAIN_ROD_HALF_WIDTH := 0.17
+# Combo-break discharge lasts ~0.45s. Long enough to register as a loss, short
+# enough that it is gone before the next note needs the highway back.
+const ARENA_COLLAPSE_DECAY := 2.2
+# Streak at which the discharge reaches full strength.
+const ARENA_COLLAPSE_FULL_COMBO := 300.0
 
 # Beat lines (from tempo map)
 var beat_times: PackedFloat64Array = PackedFloat64Array()
@@ -3548,6 +3557,7 @@ func _process(delta: float) -> void:
 		_beat_idx += 1
 		_beat_pulse = 1.0
 	_beat_pulse = maxf(0.0, _beat_pulse - delta * 4.5)
+	_arena_collapse = maxf(0.0, _arena_collapse - delta * ARENA_COLLAPSE_DECAY)
 
 	# Hit particles — gravity + lifetime
 	var i_p := 0
@@ -5351,6 +5361,9 @@ func _draw_deck_chevrons(
 	var tint := (
 		Color(0.80, 0.94, 1.0) if _overdrive_active else accent.lightened(0.42))
 	var base_alpha := (0.34 if _overdrive_active else 0.12 + energy * 0.24)
+	# The pattern snuffs out the instant the streak dies, ahead of the smoothed
+	# energy falloff, so the loss lands on the frame it happens.
+	base_alpha *= 1.0 - _arena_collapse * 0.75
 	for depth_index in range(depths.size()):
 		var depth := float(depths[depth_index])
 		var apex_z := _arena_highway_z_at(depth)
@@ -5367,6 +5380,35 @@ func _draw_deck_chevrons(
 		var col := Color(tint.r, tint.g, tint.b, alpha)
 		draw_line(left, apex, col, width, true)
 		draw_line(apex, right, col, width, true)
+
+# Combo-break discharge. A band races back up the highway, against the normal
+# flow, so the light reads as being pulled away from the player rather than
+# delivered to them — that reversal is what sells it as a loss.
+func _draw_deck_collapse(ls: float, total_w: float) -> void:
+	if _arena_collapse <= 0.002:
+		return
+	var strength := _arena_collapse_strength
+	var fade := _arena_collapse * _arena_collapse
+	# Drains the deck of colour for an instant.
+	draw_colored_polygon(
+		_gh_surface_points,
+		Color(0.55, 0.06, 0.04, 0.10 * fade * strength))
+	# The band starts at the hit line and retreats toward the horizon.
+	var travel := 1.0 - _arena_collapse
+	var span := maxf(_arena_highway_v_span, 0.001)
+	var band_depth := lerpf(span, 0.0, travel * travel)
+	var band_width := span * 0.16
+	var edges := [band_depth, maxf(band_depth - band_width, 0.0)]
+	var line_alpha := (0.55 + 0.35 * strength) * _arena_collapse
+	for edge_index in range(edges.size()):
+		var depth: float = edges[edge_index]
+		var z := _arena_highway_z_at(depth)
+		var y := _gh_y(z)
+		var alpha := line_alpha * (1.0 if edge_index == 0 else 0.45)
+		draw_line(
+			Vector2(_gh_x(ls, z), y), Vector2(_gh_x(ls + total_w, z), y),
+			Color(1.0, 0.34, 0.22, alpha),
+			(3.0 if edge_index == 0 else 1.5) + strength * 2.0)
 
 # Venue lighting: beams thrown from the rig behind the stage, sweeping across
 # the deck. They pivot near the horizon and widen toward the player, which is
@@ -5465,6 +5507,7 @@ func _draw_arena_highway_surface(
 		var charge := energy * charge_beat + lane_heat * 0.55
 		if _overdrive_active:
 			charge = maxf(charge, 0.62 * charge_beat)
+		charge *= 1.0 - _arena_collapse * 0.80
 		if charge <= 0.01:
 			continue
 		draw_colored_polygon(
@@ -5492,6 +5535,7 @@ func _draw_arena_highway_surface(
 	_draw_deck_chevrons(ls, total_w, energy, accent)
 	_draw_deck_light_beams(
 		ls, total_w, energy, accent, horizon_y, _frame_viewport_size.y)
+	_draw_deck_collapse(ls, total_w)
 
 	# A restrained horizon crown makes the surface feel bolted into the stage.
 	var top_left := _gh_surface_points[0]
@@ -6284,6 +6328,11 @@ func _spawn_combo_milestone_fx(milestone: int, fret_pos: Vector2, lane_color: Co
 				Color(tier_color.r, tier_color.g, tier_color.b, 0.94))
 
 func _spawn_combo_break_fx(lane: int, broken_combo: int) -> void:
+	# The whole deck discharges, not just the lane that was missed. Bigger
+	# streaks cost more, so the loss scales with what was actually lost.
+	_arena_collapse = 1.0
+	_arena_collapse_strength = clampf(
+		float(broken_combo) / ARENA_COLLAPSE_FULL_COMBO, 0.35, 1.0)
 	var lw := _lane_width()
 	var origin := Vector2(_lanes_start_x() + (lane + 0.5) * lw, _hit_line_y())
 	_spawn_sprite_fx("hold_ring", origin, lw * (1.28 if broken_combo >= 100 else 1.05),
