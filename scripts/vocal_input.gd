@@ -22,6 +22,8 @@ const RING_SAMPLES := WINDOW_SAMPLES * 2
 const GATE_RATIO := 3.5
 # Backstop for a device whose floor is effectively zero.
 const GATE_ABSOLUTE_FLOOR := 0.0015
+# Frames of pitch history used to decide which octave the singer is actually in.
+const HISTORY_LENGTH := 7
 
 var _player: AudioStreamPlayer = null
 var _capture: AudioEffectCapture = null
@@ -42,6 +44,8 @@ var _input_level := 0.0
 # whatever this particular room and device call silence.
 var _noise_floor := 0.02
 var _gate_open := false
+# Worker-thread only; never touched from the main thread.
+var _history := PackedFloat32Array()
 
 
 func is_running() -> bool:
@@ -231,6 +235,21 @@ func _analysis_loop() -> void:
 
 		var result := PitchDetector.detect(
 			window, 48000.0 / float(DECIMATION))
+		# Hold the reading to the octave it has been in. Without this, a single
+		# sub-harmonic frame reads as the singer dropping an octave and back.
+		if bool(result["voiced"]):
+			var trend := PitchDetector.trend_of(_history)
+			if trend > 0.0:
+				var snapped := PitchDetector.snap_to_trend(
+					float(result["midi"]), trend)
+				if not is_equal_approx(snapped, float(result["midi"])):
+					result["midi"] = snapped
+					result["hz"] = PitchDetector.midi_to_hz(snapped)
+			_history.push_back(float(result["midi"]))
+			while _history.size() > HISTORY_LENGTH:
+				_history.remove_at(0)
+		else:
+			_history.clear()
 		_mutex.lock()
 		_latest = result
 		_latest_dirty = true

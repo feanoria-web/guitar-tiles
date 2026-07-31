@@ -149,6 +149,43 @@ static func detect(samples: PackedFloat32Array, sample_rate: float) -> Dictionar
 	}
 
 
+## Pulls a detection back to the octave nearest the recent trend.
+##
+## Autocorrelation methods occasionally lock onto a sub-harmonic, and bleed from
+## other instruments in an imperfectly separated stem pulls the same way. Both
+## show up as the reading teleporting down an octave for a few frames. A singer
+## does not move an octave in 30ms, so a candidate far from the trend is almost
+## always the detector, not the voice.
+static func snap_to_trend(
+		candidate: float, trend: float, max_octaves := 2) -> float:
+	if candidate < 0.0 or trend < 0.0:
+		return candidate
+	var best := candidate
+	var best_distance := absf(candidate - trend)
+	for shift in range(-max_octaves, max_octaves + 1):
+		if shift == 0:
+			continue
+		var shifted := candidate + 12.0 * float(shift)
+		var distance := absf(shifted - trend)
+		if distance < best_distance:
+			best_distance = distance
+			best = shifted
+	return best
+
+
+## Median of the recent voiced readings, or -1 when there are none. Median
+## rather than mean so one wild frame cannot drag the trend with it.
+static func trend_of(history: PackedFloat32Array) -> float:
+	var valid: Array = []
+	for value in history:
+		if value > 0.0:
+			valid.append(value)
+	if valid.is_empty():
+		return -1.0
+	valid.sort()
+	return float(valid[valid.size() / 2])
+
+
 ## Cheap decimation with a box pre-filter. Voice tops out around 1.1kHz, so
 ## 48kHz capture carries nothing useful above the decimated Nyquist and the
 ## detector runs on a third of the samples.
