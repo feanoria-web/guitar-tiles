@@ -1,19 +1,17 @@
 extends SceneTree
 
-## Live microphone pitch readout. Sing into the mic and watch the note.
+## On-screen microphone pitch monitor.
 ##
 ##   godot --path . --script res://tools/mic_pitch_monitor.gd
 ##
-## This is the check that has to pass before any pitch highway gets drawn: if
-## detection is wrong here, it will be wrong there too, only harder to see.
+## Must run windowed: --headless swaps in the dummy audio driver and the
+## microphone goes silent. Sing along with the prompts; the window closes itself
+## when the routine finishes and prints a per-step summary.
 
-const RUN_SECONDS := 30.0
+const WINDOW_SIZE := Vector2i(560, 940)
 
+var _view: Control
 var _vox: VocalInput
-var _elapsed := 0.0
-var _next_print := 0.0
-var _voiced_frames := 0
-var _total_frames := 0
 
 
 func _initialize() -> void:
@@ -21,8 +19,21 @@ func _initialize() -> void:
 		print("audio/driver/enable_input is off - microphone capture cannot start")
 		quit(1)
 		return
+	if DisplayServer.get_name() == "headless":
+		print("Running headless: audio input is unavailable. Run windowed.")
+		quit(1)
+		return
+
+	DisplayServer.window_set_size(WINDOW_SIZE)
+	DisplayServer.window_set_title("Riffline - mikrofon testi")
+	root.content_scale_size = WINDOW_SIZE
+	root.content_scale_mode = Window.CONTENT_SCALE_MODE_CANVAS_ITEMS
+	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_IGNORE
+	root.size = WINDOW_SIZE
+
 	print("input devices: ", AudioServer.get_input_device_list())
 	print("current: ", AudioServer.input_device)
+
 	_vox = VocalInput.new()
 	root.add_child(_vox)
 	_vox.capture_failed.connect(
@@ -30,32 +41,17 @@ func _initialize() -> void:
 	if not _vox.start():
 		quit(1)
 		return
-	print("\nSing. Showing detected pitch for %d seconds.\n" % int(RUN_SECONDS))
-	print("%-9s %-9s %-7s %-8s %s" % ["time", "note", "hz", "clarity", "level"])
+
+	_view = load("res://tools/mic_monitor_view.gd").new()
+	_view.vocal_input = _vox
+	_view.size = Vector2(WINDOW_SIZE)
+	root.add_child(_view)
 
 
-func _process(delta: float) -> bool:
-	_elapsed += delta
-	_total_frames += 1
-	var pitch := _vox.get_pitch()
-	if bool(pitch["voiced"]):
-		_voiced_frames += 1
-	if _elapsed >= _next_print:
-		_next_print = _elapsed + 0.15
-		var clarity := float(pitch["clarity"])
-		var bar := ""
-		for i in range(int(clarity * 20.0)):
-			bar += "#"
-		if bool(pitch["voiced"]):
-			print("%7.1fs  %-9s %-7.1f %-8.2f %s" % [
-				_elapsed,
-				PitchDetector.midi_note_name(float(pitch["midi"])),
-				float(pitch["hz"]), clarity, bar])
-		else:
-			print("%7.1fs  %-9s" % [_elapsed, "--"])
-	if _elapsed < RUN_SECONDS:
+func _process(_delta: float) -> bool:
+	if _view == null:
+		return true
+	if not _view.is_finished():
 		return false
 	_vox.stop()
-	var voiced_pct := 100.0 * float(_voiced_frames) / float(maxi(_total_frames, 1))
-	print("\nvoiced on %.0f%% of frames" % voiced_pct)
 	return true

@@ -31,6 +31,7 @@ var _ring := PackedFloat32Array()
 var _ring_filled := 0
 var _latest := {"hz": 0.0, "midi": -1.0, "clarity": 0.0, "voiced": false}
 var _latest_dirty := false
+var _input_level := 0.0
 
 
 func is_running() -> bool:
@@ -152,7 +153,17 @@ func _push_frames(frames: PackedVector2Array) -> void:
 			total += (frame.x + frame.y) * 0.5
 		decimated[i] = total / float(DECIMATION)
 
+	# Track input loudness separately from pitch. Without it there is no way to
+	# tell "nothing reached the microphone" apart from "sound arrived but was
+	# rejected as unvoiced", which are very different problems.
+	var sum_squares := 0.0
+	for value in decimated:
+		sum_squares += value * value
+	var rms := sqrt(sum_squares / float(maxi(produced, 1)))
+
 	_mutex.lock()
+	# Fast attack, slow release, so a meter built on this stays readable.
+	_input_level = maxf(rms, _input_level * 0.80)
 	for value in decimated:
 		if _ring_filled < RING_SAMPLES:
 			_ring[_ring_filled] = value
@@ -202,6 +213,14 @@ func _analysis_loop() -> void:
 		_latest = result
 		_latest_dirty = true
 		_mutex.unlock()
+
+
+## Smoothed microphone loudness, 0..1-ish. Independent of pitch detection.
+func get_input_level() -> float:
+	_mutex.lock()
+	var level := _input_level
+	_mutex.unlock()
+	return level
 
 
 ## Last published result. Safe to poll from the main thread every frame.
