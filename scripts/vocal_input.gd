@@ -17,6 +17,11 @@ const WINDOW_SAMPLES := 1024           # 64ms at 16kHz
 const ANALYSIS_HZ := 25.0
 # Ring buffer holds a little over one window of decimated audio.
 const RING_SAMPLES := WINDOW_SAMPLES * 2
+# Signal must clear the measured noise floor by this much before it is treated
+# as voice. Sitting near the floor is what made silence read as 97% voiced.
+const GATE_RATIO := 3.5
+# Backstop for a device whose floor is effectively zero.
+const GATE_ABSOLUTE_FLOOR := 0.0015
 
 var _player: AudioStreamPlayer = null
 var _capture: AudioEffectCapture = null
@@ -32,6 +37,11 @@ var _ring_filled := 0
 var _latest := {"hz": 0.0, "midi": -1.0, "clarity": 0.0, "voiced": false}
 var _latest_dirty := false
 var _input_level := 0.0
+# Slow min-follower over the input level. Absolute thresholds do not survive
+# the spread in microphone gain across phones, so the gate is relative to
+# whatever this particular room and device call silence.
+var _noise_floor := 0.02
+var _gate_open := false
 
 
 func is_running() -> bool:
@@ -164,6 +174,14 @@ func _push_frames(frames: PackedVector2Array) -> void:
 	_mutex.lock()
 	# Fast attack, slow release, so a meter built on this stays readable.
 	_input_level = maxf(rms, _input_level * 0.80)
+	# Track the quietest level seen recently and let it creep back up, so the
+	# floor follows the room rather than a number baked in here.
+	if rms < _noise_floor:
+		_noise_floor = lerpf(_noise_floor, rms, 0.25)
+	else:
+		_noise_floor = lerpf(_noise_floor, rms, 0.0008)
+	_gate_open = _input_level > maxf(
+		_noise_floor * GATE_RATIO, GATE_ABSOLUTE_FLOOR)
 	for value in decimated:
 		if _ring_filled < RING_SAMPLES:
 			_ring[_ring_filled] = value
@@ -197,7 +215,11 @@ func _analysis_loop() -> void:
 		last_run = now
 
 		_mutex.lock()
-		var have := _ring_filled >= WINDOW_SAMPLES
+		var have := _ring_filled >= WINDOW_SAMPLES and _gate_open
+		if not _gate_open:
+			# Publish silence rather than leaving the last note latched on.
+			_latest = {"hz": 0.0, "midi": -1.0, "clarity": 0.0, "voiced": false}
+			_latest_dirty = true
 		if have:
 			# Analyse the most recent window.
 			var start := _ring_filled - WINDOW_SAMPLES
