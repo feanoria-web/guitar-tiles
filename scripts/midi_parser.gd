@@ -255,6 +255,24 @@ static func scan_instruments_from_data(data: PackedByteArray) -> Dictionary:
 				diffs.append(diff)
 		if diffs.size() > 0:
 			result[inst_key] = diffs
+
+	# Vocals is not on the difficulty-range scheme the instrument tracks use:
+	# PART VOCALS carries one line, and difficulty only changes how tight the
+	# pitch tolerance is. Offer it whenever the chart actually has sung notes.
+	for track in tracks:
+		if track["name"].to_upper() != VOCAL_TRACKS["lead"]:
+			continue
+		var sung := 0
+		for ev in track["events"]:
+			if ev["type"] == "note_on" \
+					and int(ev["note"]) >= VOCAL_PITCH_MIN \
+					and int(ev["note"]) <= VOCAL_PITCH_MAX:
+				sung += 1
+				if sung >= 8:
+					break
+		if sung >= 8:
+			result["vocals"] = DIFFICULTIES.duplicate()
+		break
 	return result
 
 # --- Track parsing ---

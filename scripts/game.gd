@@ -255,6 +255,14 @@ var max_combo: int = 0
 var audio_offset_ms: float = 0.0
 var song_started: bool = false
 var song_time_ms: float = 0.0
+# --- Vocals (karaoke) mode ---
+var vocal_notes: Array = []
+var vocal_phrases: Array = []
+var _vocals_mode: bool = false
+var _vocals_track: VocalsTrack = null
+var _vocals_scoring: VocalsScoring = null
+var _vocal_input: VocalInput = null
+
 var first_visible_idx: int = 0
 # Rendering cursor, always <= first_visible_idx. A sustain's tail outlives its
 # head by its whole duration, so culling the draw loops on head time made any
@@ -656,6 +664,70 @@ func _begin_game_load() -> void:
 	VFX.preload_effects(_vfx_quality != "performance")
 	await get_tree().process_frame
 	_load_song()
+
+# Karaoke mode replaces the note highway with the pitch board, but keeps the
+# rest of the song scaffolding — audio, pause, results — exactly as it is.
+func _setup_vocals_mode() -> void:
+	_vocals_mode = song_instrument == "vocals" and not vocal_notes.is_empty()
+	if not _vocals_mode:
+		return
+	# Vocals is authored wide; the rest of the game is portrait-locked.
+	if OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(
+			DisplayServer.SCREEN_LANDSCAPE)
+
+	_vocals_scoring = VocalsScoring.new()
+	_vocals_scoring.setup(vocal_notes, vocal_phrases, song_difficulty)
+	_vocals_scoring.phrase_completed.connect(_on_vocal_phrase_completed)
+
+	_vocals_track = VocalsTrack.new()
+	_vocals_track.notes = vocal_notes
+	_vocals_track.phrases = vocal_phrases
+	_vocals_track.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Behind the HUD, in front of nothing else — the highway is not drawn.
+	_vocals_track.z_index = -1
+	add_child(_vocals_track)
+
+	_vocal_input = VocalInput.new()
+	add_child(_vocal_input)
+	if not _vocal_input.start():
+		# Playable without a microphone: the board still scrolls, nothing scores.
+		push_warning("Game: microphone unavailable, vocals will not score")
+
+
+func _on_vocal_phrase_completed(result: Dictionary) -> void:
+	score = _vocals_scoring.score
+	if int(result["tier"]) == VocalsScoring.Tier.MISS:
+		combo = 0
+		_miss_flash_alpha = 1.0
+	else:
+		combo += 1
+		_show_milestone(String(result["tier_name"]))
+	_update_combo_tier()
+
+
+func _update_vocals(_delta: float) -> void:
+	if _vocals_track == null:
+		return
+	var midi := -1.0
+	var voiced := false
+	if _vocal_input != null and _vocal_input.is_running():
+		var pitch := _vocal_input.get_pitch()
+		voiced = bool(pitch["voiced"])
+		midi = float(pitch["midi"])
+	_vocals_scoring.update(song_time_ms, midi, voiced)
+	_vocals_track.song_time_ms = song_time_ms
+	_vocals_track.detected_midi = midi
+	_vocals_track.detected_voiced = voiced
+	_vocals_track.note_progress = _vocals_scoring.note_progress
+
+
+func _teardown_vocals() -> void:
+	if _vocal_input != null:
+		_vocal_input.stop()
+	if _vocals_mode and OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_PORTRAIT)
+
 
 func _configure_guitar_visuals() -> void:
 	_arena_mode = _gh_mode and Settings.guitar_presentation_mode == "arena"
@@ -1908,6 +1980,8 @@ func _load_song() -> void:
 	var sng_loader: RefCounted = null
 	var parse_ok := false
 	var parsed_notes: Array = []
+	var parsed_vocals: Array = []
+	var parsed_vocal_phrases: Array = []
 	var parsed_lyrics: Array = []
 	var parsed_overdrive: Array = []
 	var parsed_solos: Array = []
@@ -1950,6 +2024,8 @@ func _load_song() -> void:
 				parsed_solos = midi_parser.solo_sections
 				parsed_resolution = midi_parser.resolution
 				parsed_bpm = midi_parser.bpm_events
+				parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+				parsed_vocal_phrases = midi_parser.vocal_phrases
 				print("Game: parsed .mid from .sng (instrument=%s)" % song_instrument)
 		if not parse_ok:
 			push_error("Game: no chart or midi in .sng"); return
@@ -1978,6 +2054,8 @@ func _load_song() -> void:
 		parsed_solos = midi_parser.solo_sections
 		parsed_resolution = midi_parser.resolution
 		parsed_bpm = midi_parser.bpm_events
+		parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+		parsed_vocal_phrases = midi_parser.vocal_phrases
 
 	elif _is_stfs_source(source):
 		# CON/LIVE: parse MIDI from container, use pre-imported audio
@@ -1998,6 +2076,8 @@ func _load_song() -> void:
 		parsed_solos = midi_parser.solo_sections
 		parsed_resolution = midi_parser.resolution
 		parsed_bpm = midi_parser.bpm_events
+		parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+		parsed_vocal_phrases = midi_parser.vocal_phrases
 		# Use pre-imported audio from user://songs/ (MOGG decrypt is too slow for main thread)
 		# Extract only unencrypted MOGGs on-the-fly; encrypted ones must be imported first
 		var mogg_data := stfs.get_mogg_data()
@@ -2034,6 +2114,9 @@ func _load_song() -> void:
 		print("Game: chart offset = %.1f ms" % _chart_offset_ms)
 
 	notes = parsed_notes
+	vocal_notes = parsed_vocals
+	vocal_phrases = parsed_vocal_phrases
+	_setup_vocals_mode()
 	lyric_phrases = parsed_lyrics
 	overdrive_phrases = parsed_overdrive
 	solo_sections = parsed_solos
@@ -3524,6 +3607,9 @@ func _process(delta: float) -> void:
 
 	_advance_note_cursors()
 
+	if _vocals_mode:
+		_update_vocals(delta)
+
 	# Update sustain holds
 	_update_sustains()
 
@@ -4124,7 +4210,10 @@ func _draw() -> void:
 
 	_draw_starfield(vp)
 
-	if _gh_mode:
+	if _vocals_mode:
+		# The pitch board is its own node; nothing else on the deck applies.
+		pass
+	elif _gh_mode:
 		if Settings.pixel_stage_enabled:
 			_draw_pixel_stage(vp)
 		_draw_gh_highway(vp)
@@ -6816,6 +6905,7 @@ func _on_offset_changed(val: float) -> void:
 	offset_label.text = I18n.t("offset_label", [int(val)])
 
 func _exit_tree() -> void:
+	_teardown_vocals()
 	if _music_duck_tween and _music_duck_tween.is_valid():
 		_music_duck_tween.kill()
 	var music_bus_idx := AudioServer.get_bus_index("Music")
