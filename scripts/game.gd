@@ -262,6 +262,7 @@ var _vocals_mode: bool = false
 var _vocals_track: VocalsTrack = null
 var _vocals_scoring: VocalsScoring = null
 var _vocal_input: VocalInput = null
+var _vocals_prior_window := Vector2i.ZERO
 
 var first_visible_idx: int = 0
 # Rendering cursor, always <= first_visible_idx. A sustain's tail outlives its
@@ -675,6 +676,13 @@ func _setup_vocals_mode() -> void:
 	if OS.has_feature("mobile"):
 		DisplayServer.screen_set_orientation(
 			DisplayServer.SCREEN_LANDSCAPE)
+	else:
+		# On desktop the window override keeps a portrait shape, which squeezes
+		# the board into a column. Widen it for the duration of the song.
+		var current := DisplayServer.window_get_size()
+		if current.x < current.y:
+			_vocals_prior_window = current
+			DisplayServer.window_set_size(Vector2i(current.y, current.x))
 
 	_vocals_scoring = VocalsScoring.new()
 	_vocals_scoring.setup(vocal_notes, vocal_phrases, song_difficulty)
@@ -736,8 +744,13 @@ func _update_vocals(_delta: float) -> void:
 func _teardown_vocals() -> void:
 	if _vocal_input != null:
 		_vocal_input.stop()
-	if _vocals_mode and OS.has_feature("mobile"):
+	if not _vocals_mode:
+		return
+	if OS.has_feature("mobile"):
 		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_PORTRAIT)
+	elif _vocals_prior_window != Vector2i.ZERO:
+		DisplayServer.window_set_size(_vocals_prior_window)
+		_vocals_prior_window = Vector2i.ZERO
 
 
 func _configure_guitar_visuals() -> void:
