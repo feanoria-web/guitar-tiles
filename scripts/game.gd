@@ -285,6 +285,10 @@ var _arena_combo_energy_display: float = 0.0
 # the multiplier used to be visually silent, which made it feel free.
 var _arena_collapse: float = 0.0
 var _arena_collapse_strength: float = 0.0
+# Tier-up surge: the positive twin of the collapse. Same band, opposite
+# direction, new tier's colour.
+var _arena_tier_wave: float = 0.0
+var _arena_tier_wave_color := Color.TRANSPARENT
 var _arena_highway_texture: Texture2D = null
 var _arena_effect_texture: Texture2D = null
 # Tiles of highway art between the horizon and the hit line. Doubles as the
@@ -326,6 +330,9 @@ const SUSTAIN_ROD_HALF_WIDTH := 0.17
 const ARENA_COLLAPSE_DECAY := 2.2
 # Streak at which the discharge reaches full strength.
 const ARENA_COLLAPSE_FULL_COMBO := 300.0
+# Tier-up surge is deliberately shorter than the collapse (~0.4s). The moment
+# already carries four lightning bolts, so this arrives and gets out.
+const ARENA_TIER_WAVE_DECAY := 2.5
 
 # Beat lines (from tempo map)
 var beat_times: PackedFloat64Array = PackedFloat64Array()
@@ -3558,6 +3565,8 @@ func _process(delta: float) -> void:
 		_beat_pulse = 1.0
 	_beat_pulse = maxf(0.0, _beat_pulse - delta * 4.5)
 	_arena_collapse = maxf(0.0, _arena_collapse - delta * ARENA_COLLAPSE_DECAY)
+	_arena_tier_wave = maxf(
+		0.0, _arena_tier_wave - delta * ARENA_TIER_WAVE_DECAY)
 
 	# Hit particles — gravity + lifetime
 	var i_p := 0
@@ -5364,6 +5373,8 @@ func _draw_deck_chevrons(
 	# The pattern snuffs out the instant the streak dies, ahead of the smoothed
 	# energy falloff, so the loss lands on the frame it happens.
 	base_alpha *= 1.0 - _arena_collapse * 0.75
+	# ...and flares briefly as a new tier lands.
+	base_alpha *= 1.0 + _arena_tier_wave * 0.60
 	for depth_index in range(depths.size()):
 		var depth := float(depths[depth_index])
 		var apex_z := _arena_highway_z_at(depth)
@@ -5380,6 +5391,41 @@ func _draw_deck_chevrons(
 		var col := Color(tint.r, tint.g, tint.b, alpha)
 		draw_line(left, apex, col, width, true)
 		draw_line(apex, right, col, width, true)
+
+# Tier-up surge. The mirror of the discharge below: same band, but it starts at
+# the horizon and accelerates toward the player in the new tier's colour, so
+# gaining a multiplier reads as power arriving rather than draining away.
+func _draw_deck_tier_wave(ls: float, total_w: float) -> void:
+	if _arena_tier_wave <= 0.002:
+		return
+	var tint := _arena_tier_wave_color
+	var fade := _arena_tier_wave * _arena_tier_wave
+	draw_colored_polygon(
+		_gh_surface_points,
+		Color(tint.r, tint.g, tint.b, 0.07 * fade))
+	var travel := 1.0 - _arena_tier_wave
+	var span := maxf(_arena_highway_v_span, 0.001)
+	# Accelerating, like the notes themselves.
+	var band_depth := lerpf(0.0, span, travel * travel)
+	var band_width := span * 0.14
+	var head := tint.lightened(0.45)
+	var trail := maxf(band_depth - band_width, 0.0)
+	for edge_index in range(2):
+		var depth := band_depth if edge_index == 0 else trail
+		var z := _arena_highway_z_at(depth)
+		var y := _gh_y(z)
+		var left := Vector2(_gh_x(ls, z), y)
+		var right := Vector2(_gh_x(ls + total_w, z), y)
+		var edge_scale := 1.0 if edge_index == 0 else 0.40
+		var alpha := 0.80 * _arena_tier_wave * edge_scale
+		# Layered like the sustain rod, or a 3px line vanishes into the pattern.
+		var core := head.lightened(0.35) if edge_index == 0 else head
+		draw_line(left, right,
+			Color(head.r, head.g, head.b, alpha * 0.22), 15.0 * edge_scale)
+		draw_line(left, right,
+			Color(head.r, head.g, head.b, alpha * 0.55), 6.0 * edge_scale)
+		draw_line(left, right,
+			Color(core.r, core.g, core.b, alpha), 2.4 * edge_scale)
 
 # Combo-break discharge. A band races back up the highway, against the normal
 # flow, so the light reads as being pulled away from the player rather than
@@ -5535,6 +5581,7 @@ func _draw_arena_highway_surface(
 	_draw_deck_chevrons(ls, total_w, energy, accent)
 	_draw_deck_light_beams(
 		ls, total_w, energy, accent, horizon_y, _frame_viewport_size.y)
+	_draw_deck_tier_wave(ls, total_w)
 	_draw_deck_collapse(ls, total_w)
 
 	# A restrained horizon crown makes the surface feel bolted into the stage.
@@ -6253,6 +6300,11 @@ func _try_hit(lane: int, judgment: String = "perfect") -> void:
 		_spawn_lightning(Vector2(fret_pos.x + randf_range(-25, 25), strike_top), fret_pos)
 		if _effective_vfx_quality() != "performance":
 			_spawn_lightning(Vector2(fret_pos.x + randf_range(-60, 60), strike_top), fret_pos, BOLT_COLOR, 0.14)
+		# Surge runs the deck in the new tier's colour, toward the player.
+		_arena_tier_wave = 1.0
+		_arena_tier_wave_color = (
+			_combo_glow_color if _combo_glow_color.a > 0.0
+			else UITheme.NEON_CYAN)
 
 	# Log first 20 hits for drift diagnosis
 	if _hit_log_count < 20:

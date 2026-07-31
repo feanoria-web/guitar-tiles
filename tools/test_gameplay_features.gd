@@ -111,6 +111,10 @@ func _initialize() -> void:
 	# ~0.45s to fully discharge.
 	assert(1.0 / game.ARENA_COLLAPSE_DECAY < 0.6)
 	game._arena_collapse = 0.0
+	# The tier-up surge is the mirror of the discharge, and must be the shorter
+	# of the two — that moment already carries four lightning bolts.
+	assert(game.ARENA_TIER_WAVE_DECAY > game.ARENA_COLLAPSE_DECAY)
+	assert(1.0 / game.ARENA_TIER_WAVE_DECAY < 0.5)
 	# The deck art itself is lifted from the near-black sheets these rips ship
 	# as, but must stay clearly below the gems.
 	assert(game._arena_highway_gain > 1.5)
