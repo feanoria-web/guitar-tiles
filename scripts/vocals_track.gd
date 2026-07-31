@@ -167,10 +167,13 @@ func _draw_notes(font: Font) -> void:
 			continue
 		var text_width := font.get_string_size(
 			text, HORIZONTAL_ALIGNMENT_LEFT, -1, 19).x
-		var text_x := start_x
+		# Centre the syllable on its note. Anchoring to the note's left edge
+		# made a long note's word reach the now line well before the note body
+		# did, so the lyrics read as running ahead of the melody.
+		var text_x := start_x + (maxf(end_x - start_x, 0.0) - text_width) * 0.5
 		if text_x < lyric_right_edge:
-			# Nudge right off the previous syllable; if that pushes it past its
-			# own note it is a dense run, so drop it rather than mislead.
+			# Nudge right off the previous syllable; if that pushes it clear of
+			# its own note it is a dense run, so drop it rather than mislead.
 			text_x = lyric_right_edge
 			if text_x > end_x + 14.0:
 				continue
