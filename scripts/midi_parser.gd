@@ -493,6 +493,14 @@ static func parse_vocal_syllable(raw: String) -> Dictionary:
 # Builds the karaoke chart: pitched syllables per part, phrase boundaries and
 # percussion hits. Runs independently of _extract_lyrics so the existing lyric
 # strip keeps behaving exactly as before.
+## True when this chart carries a singable vocal line. Phase 5 needs it to
+## decide whether to offer vocals for a song; deliberately not surfaced in any
+## UI yet, because selecting vocals has nowhere to go until the mode is wired up.
+func has_vocals() -> bool:
+	var lead: Array = vocal_parts.get("lead", [])
+	return lead.size() > 0 and vocal_phrases.size() > 0
+
+
 func _extract_vocals(tracks: Array) -> void:
 	vocal_parts.clear()
 	vocal_phrases.clear()
