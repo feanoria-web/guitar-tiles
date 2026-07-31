@@ -681,12 +681,23 @@ func _setup_vocals_mode() -> void:
 	_vocals_scoring.phrase_completed.connect(_on_vocal_phrase_completed)
 
 	_vocals_track = VocalsTrack.new()
+	# The note array still holds the guitar chart parsed as a fallback. Nobody is
+	# playing it, and leaving it in place had the miss detector draining the rock
+	# meter for notes the singer was never shown.
+	notes = []
+	note_state = PackedByteArray()
+	total_notes = vocal_notes.size()
+	if is_instance_valid(lyric_panel):
+		lyric_panel.visible = false
 	_vocals_track.notes = vocal_notes
 	_vocals_track.phrases = vocal_phrases
 	_vocals_track.set_anchors_preset(Control.PRESET_FULL_RECT)
-	# Behind the HUD, in front of nothing else — the highway is not drawn.
-	_vocals_track.z_index = -1
 	add_child(_vocals_track)
+	# Children draw after the parent's own _draw, so the board lands on top of
+	# the background gradient. Moving it to the front of the child list keeps it
+	# under the HUD. A negative z_index would bury it behind the opaque
+	# background instead, which is exactly what it did on the first attempt.
+	move_child(_vocals_track, 0)
 
 	_vocal_input = VocalInput.new()
 	add_child(_vocal_input)
@@ -4219,13 +4230,14 @@ func _draw() -> void:
 		_draw_gh_highway(vp)
 	else:
 		_draw_flat_highway(vp)
-	_draw_overdrive_overlay(vp)
+	if not _vocals_mode:
+		_draw_overdrive_overlay(vp)
 
-	# One-shot sprite effects (hits, misses, rings) + lightning
-	_draw_sprite_fx()
-	_draw_bolts()
+		# One-shot sprite effects (hits, misses, rings) + lightning
+		_draw_sprite_fx()
+		_draw_bolts()
 
-	_draw_particles()
+		_draw_particles()
 
 	# Miss flash — red edges (thick + visible)
 	if _miss_flash_alpha > 0:

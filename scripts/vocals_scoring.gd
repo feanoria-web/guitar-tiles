@@ -13,9 +13,18 @@ signal phrase_completed(result: Dictionary)
 enum Tier { MISS, OK, STRONG, AWESOME }
 
 # Fraction of a phrase's singable time that has to land on pitch.
-const TIER_AWESOME := 0.88
-const TIER_STRONG := 0.70
-const TIER_OK := 0.50
+const TIER_AWESOME := 0.75
+const TIER_STRONG := 0.55
+const TIER_OK := 0.35
+# Singers scoop into a note and let its tail go; charts also hold notes longer
+# than anyone sustains them. Grading the attack and the tail made accurate
+# singing score badly, so both ends are excluded from the phrase total.
+const NOTE_ONSET_GRACE := 0.18
+const NOTE_TAIL_GRACE := 0.12
+# Being slightly outside tolerance is not the same as being silent. Between one
+# and two times the tolerance still earns partial credit, which removes the
+# cliff edge that made the mode feel arbitrary.
+const NEAR_MISS_CREDIT := 0.5
 
 const TIER_NAMES := {
 	Tier.AWESOME: "AWESOME",
@@ -100,16 +109,33 @@ func _credit(time_ms: float, slice_ms: float, detected_midi: float,
 			continue
 		if not voiced:
 			continue
-		# A non-pitched syllable only asks for sound, not a pitch.
-		var matched := bool(note["non_pitched"])
-		if not matched and detected_midi > 0.0:
-			matched = PitchDetector.pitch_class_distance(
-				detected_midi, float(note["midi_note"])) <= tolerance_semitones
-		if not matched:
-			continue
-		_note_matched_ms[index] += slice_ms
 		var span := maxf(float(note["end_ms"]) - start_ms, 1.0)
-		note_progress[index] = clampf(_note_matched_ms[index] / span, 0.0, 1.0)
+		# Skip the scoop in and the release; see NOTE_ONSET_GRACE.
+		if time_ms < start_ms + span * NOTE_ONSET_GRACE:
+			continue
+		if time_ms > float(note["end_ms"]) - span * NOTE_TAIL_GRACE:
+			continue
+		# A non-pitched syllable only asks for sound, not a pitch.
+		var credit := 0.0
+		if bool(note["non_pitched"]):
+			credit = 1.0
+		elif detected_midi > 0.0:
+			var distance := PitchDetector.pitch_class_distance(
+				detected_midi, float(note["midi_note"]))
+			if distance <= tolerance_semitones:
+				credit = 1.0
+			elif distance <= tolerance_semitones * 2.0:
+				credit = NEAR_MISS_CREDIT
+		if credit <= 0.0:
+			continue
+		_note_matched_ms[index] += slice_ms * credit
+		note_progress[index] = clampf(
+			_note_matched_ms[index] / (span * _gradeable_fraction()), 0.0, 1.0)
+
+
+## Portion of a note that is actually graded, once both grace windows are off.
+func _gradeable_fraction() -> float:
+	return maxf(1.0 - NOTE_ONSET_GRACE - NOTE_TAIL_GRACE, 0.05)
 
 
 func _close_finished_phrases(time_ms: float) -> void:
@@ -131,7 +157,8 @@ func _award(phrase: Dictionary) -> void:
 		var note_start := float(note["time_ms"])
 		if note_start < start_ms or note_start >= end_ms:
 			continue
-		singable_ms += maxf(float(note["end_ms"]) - note_start, 1.0)
+		var note_span := maxf(float(note["end_ms"]) - note_start, 1.0)
+		singable_ms += note_span * _gradeable_fraction()
 		matched_ms += float(_note_matched_ms[index])
 	# A phrase with no notes in it is a rest; it is not graded at all.
 	if singable_ms <= 0.0:
