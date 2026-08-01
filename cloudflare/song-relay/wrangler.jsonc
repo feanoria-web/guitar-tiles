@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "riffline-song-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-29",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "FIREBASE_DATABASE_URL": "https://riffline-default-rtdb.europe-west1.firebasedatabase.app"
+  },
+  "r2_buckets": [
+    {
+      "binding": "SONGS",
+      "bucket_name": "riffline-song-relay"
+    }
+  ]
+}

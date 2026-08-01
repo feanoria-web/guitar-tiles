@@ -1,0 +1,13 @@
+{
+  "firebase_database_url": "https://riffline-default-rtdb.europe-west1.firebasedatabase.app",
+  "firebase_api_key": "AIzaSyBZEJJaSubBNksE5jbnJ2hy4OyuJQLNvrc",
+  "song_cloud_url": "https://riffline-song-relay.gurkangr698.workers.dev",
+  "ice_servers": [
+    {
+      "urls": [
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302"
+      ]
+    }
+  ]
+}

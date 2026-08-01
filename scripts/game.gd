@@ -14,6 +14,9 @@ const ASSIST_CLUSTER_MIN_MS := 260.0
 const ASSIST_CLUSTER_MAX_MS := 420.0
 const ASSIST_HIT_WINDOW_MS := 260.0
 const ASSIST_GOOD_ZONE_SCALE := 1.18
+const MULTIPLAYER_STATE_INTERVAL := 0.10
+const LIVE_MULTIPLAYER_SCOREBOARD_INTERVAL := 0.40
+const SHOW_LIVE_MULTIPLAYER_SCOREBOARD := true
 
 # Spatial touch judgment. The visible colored button is Perfect; the nearby
 # area in the same lane is Good. Touches farther away do not hit the note.
@@ -107,6 +110,137 @@ const LANE_BG := Color(0.10, 0.09, 0.17, 0.45)
 const LANE_BORDER := Color(0.35, 0.30, 0.60, 0.30)
 const HIT_LINE_COLOR := Color(UITheme.NEON_CYAN.r, UITheme.NEON_CYAN.g, UITheme.NEON_CYAN.b, 0.75)
 
+const HIGHWAY_THEMES := {
+	"neon": {
+		"bg_top": Color(0.045, 0.035, 0.10),
+		"bg_bottom": Color(0.02, 0.015, 0.05),
+		"surface_far": Color(0.045, 0.04, 0.10, 0.92),
+		"surface_near": Color(0.085, 0.075, 0.16, 0.96),
+		"lane_border": Color(0.35, 0.30, 0.60),
+		"rail": Color(0.58, 0.35, 1.0),
+		"hit": Color(0.10, 0.85, 1.0),
+		"beat": Color(0.70, 0.75, 1.0),
+		"stage_primary": Color(0.58, 0.35, 1.0),
+		"stage_secondary": Color(0.10, 0.85, 1.0),
+	},
+	"classic": {
+		"bg_top": Color(0.035, 0.032, 0.04),
+		"bg_bottom": Color(0.008, 0.008, 0.012),
+		"surface_far": Color(0.035, 0.035, 0.045, 0.94),
+		"surface_near": Color(0.085, 0.085, 0.10, 0.98),
+		"lane_border": Color(0.46, 0.46, 0.54),
+		"rail": Color(0.78, 0.80, 0.88),
+		"hit": Color(0.92, 0.94, 1.0),
+		"beat": Color(0.72, 0.72, 0.76),
+		"stage_primary": Color(0.95, 0.36, 0.16),
+		"stage_secondary": Color(1.0, 0.74, 0.28),
+	},
+	"midnight": {
+		"bg_top": Color(0.008, 0.025, 0.065),
+		"bg_bottom": Color(0.002, 0.006, 0.02),
+		"surface_far": Color(0.012, 0.026, 0.06, 0.94),
+		"surface_near": Color(0.025, 0.065, 0.13, 0.98),
+		"lane_border": Color(0.12, 0.38, 0.64),
+		"rail": Color(0.08, 0.64, 1.0),
+		"hit": Color(1.0, 0.24, 0.72),
+		"beat": Color(0.28, 0.72, 1.0),
+		"stage_primary": Color(0.08, 0.64, 1.0),
+		"stage_secondary": Color(1.0, 0.24, 0.72),
+	},
+}
+
+const PIXEL_STAGE_FRAME_COUNTS := {
+	"guitarist": 40,
+	"drummer": 36,
+	"bassist": 12,
+	"vocalist": 12,
+}
+const PIXEL_STAGE_IDLE_FRAMES := [4, 5, 6, 7]
+const PIXEL_STAGE_ACTION_FRAMES := [0, 8, 1, 9, 2, 10, 3, 11]
+const PIXEL_STAGE_ACTION_FRAMES_BY_ROLE := {
+	"guitarist": [
+		0, 12, 13, 14, 15, 8,
+		16, 17, 18, 19, 1,
+		20, 21, 22, 23, 9,
+		24, 25, 26, 27, 2,
+		28, 29, 30, 31, 10,
+		32, 33, 34, 35, 3,
+		36, 37, 38, 39, 11,
+	],
+	"drummer": [
+		0, 12, 13, 14, 15, 8,
+		16, 17, 18, 19, 1,
+		20, 21, 22, 23, 9,
+		24, 25, 26, 27, 2,
+		28, 29, 30, 31, 10,
+		32, 33, 34, 35, 3, 11,
+	],
+	"bassist": PIXEL_STAGE_ACTION_FRAMES,
+	"vocalist": PIXEL_STAGE_ACTION_FRAMES,
+}
+const PIXEL_STAGE_FRAME_PATHS := {
+	"guitarist": "res://assets/stage/pixel_guitarist_%d.png",
+	"drummer": "res://assets/stage/pixel_drummer_%d.png",
+	"bassist": "res://assets/stage/pixel_bassist_%d.png",
+	"vocalist": "res://assets/stage/pixel_vocalist_%d.png",
+}
+const ARENA_STAGE_ATLAS_PATHS := {
+	"guitarist": "res://assets/stage/livewire/guitarist_atlas.png",
+	"drummer": "res://assets/stage/livewire/drummer_atlas.png",
+	"bassist": "res://assets/stage/livewire/bassist_atlas.png",
+	"vocalist": "res://assets/stage/livewire/vocalist_atlas.png",
+}
+const ARENA_STAGE_ATLAS_COLUMNS := 4
+const ARENA_STAGE_ATLAS_ROWS := 2
+const ARENA_STAGE_FRAME_COUNT := 8
+const ARENA_STAGE_IDLE_FRAMES := [0]
+const ARENA_STAGE_ACTION_FRAMES := [1, 2, 3, 4, 5, 6, 7, 2, 6, 3]
+const ARENA_HIGHWAY_TEXTURE_PATH := "res://assets/highways/arena_wor_highway.png"
+# Depth slices used by the non-scrolling effect overlay. The overlay is pinned
+# to the deck, so screen-static slices are enough for it.
+const ARENA_HIGHWAY_STRIP_COUNT := 18
+# World length of the visible deck expressed in highway widths. One tile of a
+# texture with aspect (height / width) covers `aspect` widths, so the 1:2 sheets
+# every GH/CH highway ships as resolve to the 1.5 repeats this deck was
+# originally tuned around — while a 1:1 or 1:3 import now keeps its proportions
+# instead of being squashed into a hard-coded 1.5.
+const ARENA_HIGHWAY_DECK_LENGTH := 3.0
+const ARENA_HIGHWAY_REPEAT_MIN := 0.4
+const ARENA_HIGHWAY_REPEAT_MAX := 6.0
+# Depth slices per texture tile. Slice edges are pinned to texture rows rather
+# than to screen rows (see _update_arena_highway_deck) so the residual affine
+# error travels with the art instead of standing still on screen. A standing
+# error is what made the deck wobble: every feature sped up and slowed down
+# again as it crossed each fixed screen-space slice.
+const ARENA_HIGHWAY_SLICES_PER_TILE := 16
+# Mean per-channel difference (0-255) between the top and bottom texture rows
+# above which the art is treated as non-tiling and mirrored instead of wrapped.
+const ARENA_HIGHWAY_SEAM_TOLERANCE := 18.0
+# Screen luminance the art's 99th percentile is lifted to, and the ceiling on
+# that lift so a genuinely black sheet is not amplified into noise. Kept well
+# below 1.0 on purpose: the deck has to read as a lit surface while staying
+# darker than the gems, or the notes stop popping against it.
+const ARENA_HIGHWAY_TARGET_PEAK := 0.50
+const ARENA_HIGHWAY_MAX_GAIN := 3.0
+const ARENA_EFFECT_ATLAS_PATH := "res://assets/highways/arena_rb4_effect5_atlas.png"
+const ARENA_EFFECT_COLUMNS := 16
+const ARENA_EFFECT_ROWS := 12
+const ARENA_EFFECT_FRAME_COUNT := 192
+const ARENA_EFFECT_DURATION_SEC := 39.95
+# The atlas is 192 frames sampled from a 40s clip, so replaying it at the source
+# duration runs at 4.8fps — adjacent frames are 0.2s of smoke apart and the
+# crossfade between them ghosts instead of flowing. Playing it back faster
+# halves that gap; the loop is then ~20s, which is still long enough not to
+# read as a repeat.
+const ARENA_EFFECT_PLAYBACK_RATE := 2.0
+const ARENA_EFFECT_FPS := float(ARENA_EFFECT_FRAME_COUNT) \
+	/ ARENA_EFFECT_DURATION_SEC * ARENA_EFFECT_PLAYBACK_RATE
+const PIXEL_STAGE_ROLE_INSTRUMENTS := {
+	"guitarist": "guitar",
+	"drummer": "drums",
+	"bassist": "bass",
+}
+
 
 # Note states: 0=active, 1=hit(darkened,scrolling), 2=missed, 3=sustain_holding
 var notes: Array = []
@@ -121,7 +255,22 @@ var max_combo: int = 0
 var audio_offset_ms: float = 0.0
 var song_started: bool = false
 var song_time_ms: float = 0.0
+# --- Vocals (karaoke) mode ---
+var vocal_notes: Array = []
+var vocal_phrases: Array = []
+var _vocals_mode: bool = false
+var _vocals_track: VocalsTrack = null
+var _vocals_scoring: VocalsScoring = null
+var _vocal_input: VocalInput = null
+var _vocals_prior_window := Vector2i.ZERO
+
 var first_visible_idx: int = 0
+# Rendering cursor, always <= first_visible_idx. A sustain's tail outlives its
+# head by its whole duration, so culling the draw loops on head time made any
+# sustain longer than the approach plus linger window vanish off the top of the
+# highway while it was still being held and still scoring. Gameplay loops keep
+# using first_visible_idx so hit detection and miss marking are unchanged.
+var _first_drawn_idx: int = 0
 var current_phrase_idx: int = 0
 var lane_count: int = 5
 var lane_colors: Array[Color] = []
@@ -139,12 +288,60 @@ var _pause_layer: CanvasLayer = null
 
 # --- GH pseudo-3D highway ---
 var _gh_mode: bool = true
+var _arena_mode: bool = false
+var _arena_combo_energy_display: float = 0.0
+# Combo-break discharge: 1.0 the instant the streak dies, decaying to 0. Losing
+# the multiplier used to be visually silent, which made it feel free.
+var _arena_collapse: float = 0.0
+var _arena_collapse_strength: float = 0.0
+# Tier-up surge: the positive twin of the collapse. Same band, opposite
+# direction, new tier's colour.
+var _arena_tier_wave: float = 0.0
+var _arena_tier_wave_color := Color.TRANSPARENT
+var _arena_highway_texture: Texture2D = null
+var _arena_effect_texture: Texture2D = null
+# Tiles of highway art between the horizon and the hit line. Doubles as the
+# scroll rate: advancing this many v units per approach time makes the deck
+# travel in lock-step with the notes, because base_v(1.0) == this value.
+var _arena_highway_repeat: float = 1.5
+# Art whose top and bottom rows do not match is mirrored so the loop folds
+# instead of jumping. Seamless art wraps and keeps its original direction.
+var _arena_highway_mirror: bool = false
+# Brightness lift measured from the art at load. See _arena_highway_gain_for.
+var _arena_highway_gain: float = 1.0
+var _arena_highway_v_span: float = 1.5
+var _arena_highway_scroll_phase_cached: float = -1000.0
+var _arena_effect_frame_a_cached: int = -1
+var _arena_effect_frame_b_cached: int = -1
+var _highway_theme: Dictionary = HIGHWAY_THEMES["neon"]
+var _pixel_stage_textures: Dictionary = {}
+# Per-frame opaque content rect (Rect2, pixels). The generated frames aren't
+# registered 1:1, so we anchor by the trimmed silhouette instead of the canvas.
+var _pixel_stage_frame_rects: Dictionary = {}
+var _stage_note_tracks: Dictionary = {}
+var _stage_note_indices: Dictionary = {}
+var _stage_last_event_ms: Dictionary = {}
+var _stage_visible_roles: Array[String] = []
 const GH_TOP_SCALE := 0.36          # highway width at horizon relative to bottom
 const GH_VANISH_Y_RATIO := -0.10    # vanishing point (relative to viewport height, above top)
 const GH_NOTE_FRET_RADIUS_RATIO := 0.42
 const GH_HIT_FRET_RADIUS_RATIO := 0.50
 const GH_HIT_PAD_HEIGHT_RATIO := 0.82
 const GH_HIT_PAD_MARGIN_RATIO := 0.04
+# Long notes carry a small procedural energy column. It starts faint while the
+# sustain approaches and becomes white-hot only after the head is held. The
+# quality-specific caps keep dense charts cheap on mobile GPUs.
+const SUSTAIN_LIGHTNING_MIN_DURATION_MS := 180.0
+# Half-width of the sustain rod at the hit line, as a fraction of lane width.
+const SUSTAIN_ROD_HALF_WIDTH := 0.17
+# Combo-break discharge lasts ~0.45s. Long enough to register as a loss, short
+# enough that it is gone before the next note needs the highway back.
+const ARENA_COLLAPSE_DECAY := 2.2
+# Streak at which the discharge reaches full strength.
+const ARENA_COLLAPSE_FULL_COMBO := 300.0
+# Tier-up surge is deliberately shorter than the collapse (~0.4s). The moment
+# already carries four lightning bolts, so this arrives and gets out.
+const ARENA_TIER_WAVE_DECAY := 2.5
 
 # Beat lines (from tempo map)
 var beat_times: PackedFloat64Array = PackedFloat64Array()
@@ -194,6 +391,22 @@ var _gh_surface_points := PackedVector2Array()
 var _gh_surface_colors := PackedColorArray([
 	Color(0.045, 0.04, 0.10, 0.92), Color(0.045, 0.04, 0.10, 0.92),
 	Color(0.085, 0.075, 0.16, 0.96), Color(0.085, 0.075, 0.16, 0.96)])
+var _arena_surface_colors := PackedColorArray([
+	Color(0.030, 0.027, 0.025, 0.98), Color(0.030, 0.027, 0.025, 0.98),
+	Color(0.080, 0.071, 0.064, 1.0), Color(0.080, 0.071, 0.064, 1.0)])
+var _arena_lane_panels: Array[PackedVector2Array] = []
+var _arena_lane_cores: Array[PackedVector2Array] = []
+# Scrolling deck slices. Geometry is rebuilt each frame from texture-anchored
+# depth boundaries; the UV pairs never change once the layout is known.
+var _arena_deck_slices: Array[PackedVector2Array] = []
+var _arena_deck_slice_uvs: Array[PackedVector2Array] = []
+var _arena_deck_slice_count: int = 0
+var _arena_deck_used_cached: int = 0
+# Static overlay slices for the effect atlas (uniform in world depth).
+var _arena_highway_strips: Array[PackedVector2Array] = []
+var _arena_highway_strip_depth := PackedFloat32Array()
+var _arena_effect_strip_uvs_a: Array[PackedVector2Array] = []
+var _arena_effect_strip_uvs_b: Array[PackedVector2Array] = []
 var _gh_combo_left_points := PackedVector2Array()
 var _gh_combo_right_points := PackedVector2Array()
 
@@ -305,6 +518,11 @@ var master_player: AudioStreamPlayer = null
 var hud_layer: CanvasLayer
 var score_label: Label
 var fps_label: Label
+var multiplayer_scoreboard_label: Label
+var _multiplayer_state_elapsed: float = 0.0
+var _multiplayer_scoreboard_elapsed: float = 0.0
+var _multiplayer_scoreboard_dirty: bool = false
+var _last_multiplayer_scoreboard_text: String = ""
 var _fps_timer: float = 0.0
 var _hud_slow_timer: float = 0.0
 var _hud_last_score: int = -1
@@ -340,6 +558,8 @@ var _rock_meter_ui_zone: int = -1
 # Loading screen
 var loading_layer: CanvasLayer
 var loading_status_label: Label
+var loading_countdown_label: Label
+var loading_countdown_plate: PanelContainer
 var loading_bar: ProgressBar
 var loading_song_label: Label
 var loading_artist_label: Label
@@ -360,12 +580,16 @@ static var song_difficulty: String = "Expert"
 static var song_mode: String = "guitar"
 static var song_preset: String = "Tiles"
 static var song_instrument: String = "guitar"
-static var debug_infinite_overdrive: bool = false
+static var song_available_instruments: Dictionary = {}
 
 func _ready() -> void:
 	Settings.load_settings()
 	_vfx_quality = Settings.vfx_quality
 	_rock_meter_mode = Settings.rock_meter_mode
+	if BattleSession.match_loading or BattleSession.match_active:
+		# Multiplayer always tracks performance. Battle ranks each score; Band
+		# uses the host-calculated shared meter instead of a local instant fail.
+		_rock_meter_mode = "visual"
 	_frame_time_msec = float(Time.get_ticks_msec())
 	_frame_time_sec = _frame_time_msec / 1000.0
 	_ui_scale = _detect_ui_scale()
@@ -388,6 +612,7 @@ func _ready() -> void:
 		lane_colors.assign(GUITAR_COLORS)
 
 	_gh_mode = Settings.highway_style == "gh"
+	_configure_guitar_visuals()
 	_cached_approach_ms = Settings.get_approach_ms()
 	_cache_render_geometry()
 	get_viewport().size_changed.connect(_cache_render_geometry)
@@ -420,6 +645,13 @@ func _ready() -> void:
 
 	_build_note_styles()
 	_build_ui()
+	if BattleSession.match_loading or BattleSession.match_active:
+		if SHOW_LIVE_MULTIPLAYER_SCOREBOARD \
+				and not BattleSession.scoreboard_changed.is_connected(
+					_on_multiplayer_scoreboard_changed):
+			BattleSession.scoreboard_changed.connect(_on_multiplayer_scoreboard_changed)
+		if not BattleSession.band_failed.is_connected(_on_multiplayer_band_failed):
+			BattleSession.band_failed.connect(_on_multiplayer_band_failed)
 	_setup_crowd_audio()
 	_setup_miss_sfx()
 	is_loading = true
@@ -433,6 +665,329 @@ func _begin_game_load() -> void:
 	VFX.preload_effects(_vfx_quality != "performance")
 	await get_tree().process_frame
 	_load_song()
+
+# Karaoke mode replaces the note highway with the pitch board, but keeps the
+# rest of the song scaffolding — audio, pause, results — exactly as it is.
+func _setup_vocals_mode() -> void:
+	_vocals_mode = song_instrument == "vocals" and not vocal_notes.is_empty()
+	if not _vocals_mode:
+		return
+	# Vocals is authored wide; the rest of the game is portrait-locked.
+	if OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(
+			DisplayServer.SCREEN_LANDSCAPE)
+	else:
+		# On desktop the window override keeps a portrait shape, which squeezes
+		# the board into a column. Widen it for the duration of the song.
+		var current := DisplayServer.window_get_size()
+		if current.x < current.y:
+			_vocals_prior_window = current
+			DisplayServer.window_set_size(Vector2i(current.y, current.x))
+
+	_vocals_scoring = VocalsScoring.new()
+	_vocals_scoring.setup(vocal_notes, vocal_phrases, song_difficulty)
+	_vocals_scoring.phrase_completed.connect(_on_vocal_phrase_completed)
+
+	_vocals_track = VocalsTrack.new()
+	# The note array still holds the guitar chart parsed as a fallback. Nobody is
+	# playing it, and leaving it in place had the miss detector draining the rock
+	# meter for notes the singer was never shown.
+	notes = []
+	note_state = PackedByteArray()
+	total_notes = vocal_notes.size()
+	if is_instance_valid(lyric_panel):
+		lyric_panel.visible = false
+	_vocals_track.notes = vocal_notes
+	_vocals_track.phrases = vocal_phrases
+	_vocals_track.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(_vocals_track)
+	# Children draw after the parent's own _draw, so the board lands on top of
+	# the background gradient. Moving it to the front of the child list keeps it
+	# under the HUD. A negative z_index would bury it behind the opaque
+	# background instead, which is exactly what it did on the first attempt.
+	move_child(_vocals_track, 0)
+
+	_vocal_input = VocalInput.new()
+	add_child(_vocal_input)
+	if not _vocal_input.start():
+		# Playable without a microphone: the board still scrolls, nothing scores.
+		push_warning("Game: microphone unavailable, vocals will not score")
+
+
+func _on_vocal_phrase_completed(result: Dictionary) -> void:
+	score = _vocals_scoring.score
+	if int(result["tier"]) == VocalsScoring.Tier.MISS:
+		combo = 0
+		_miss_flash_alpha = 1.0
+	else:
+		combo += 1
+		_show_milestone(String(result["tier_name"]))
+	_update_combo_tier()
+
+
+func _update_vocals(_delta: float) -> void:
+	if _vocals_track == null:
+		return
+	var midi := -1.0
+	var voiced := false
+	if _vocal_input != null and _vocal_input.is_running():
+		var pitch := _vocal_input.get_pitch()
+		voiced = bool(pitch["voiced"])
+		midi = float(pitch["midi"])
+	_vocals_scoring.update(song_time_ms, midi, voiced)
+	_vocals_track.song_time_ms = song_time_ms
+	_vocals_track.detected_midi = midi
+	_vocals_track.detected_voiced = voiced
+	_vocals_track.note_progress = _vocals_scoring.note_progress
+
+
+func _teardown_vocals() -> void:
+	if _vocal_input != null:
+		_vocal_input.stop()
+	if not _vocals_mode:
+		return
+	if OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_PORTRAIT)
+	elif _vocals_prior_window != Vector2i.ZERO:
+		DisplayServer.window_set_size(_vocals_prior_window)
+		_vocals_prior_window = Vector2i.ZERO
+
+
+func _configure_guitar_visuals() -> void:
+	_arena_mode = _gh_mode and Settings.guitar_presentation_mode == "arena"
+	_arena_highway_texture = null
+	_arena_effect_texture = null
+	_arena_highway_scroll_phase_cached = -1000.0
+	_arena_deck_used_cached = 0
+	_arena_effect_frame_a_cached = -1
+	_arena_effect_frame_b_cached = -1
+	_arena_highway_repeat = 1.5
+	_arena_highway_mirror = false
+	_arena_highway_gain = 1.0
+	if _arena_mode:
+		var highway_image: Image = null
+		if (Settings.arena_custom_highway_enabled
+				and FileAccess.file_exists(Settings.CUSTOM_ARENA_HIGHWAY_PATH)):
+			var custom_highway := Image.new()
+			if custom_highway.load(Settings.CUSTOM_ARENA_HIGHWAY_PATH) == OK:
+				if not custom_highway.is_empty():
+					highway_image = custom_highway
+					# The deck is minified hard toward the horizon, so imported
+					# art needs a mip chain too or it crawls as it scrolls.
+					custom_highway.generate_mipmaps()
+					_arena_highway_texture = ImageTexture.create_from_image(
+						custom_highway)
+		if (_arena_highway_texture == null
+				and ResourceLoader.exists(ARENA_HIGHWAY_TEXTURE_PATH)):
+			_arena_highway_texture = ResourceLoader.load(
+				ARENA_HIGHWAY_TEXTURE_PATH) as Texture2D
+		if _arena_highway_texture:
+			_configure_arena_highway_tiling(highway_image)
+		# The RB4 video atlas is deliberately not loaded any more. It stored a
+		# 512x1024 source at 96x192 per frame and then magnified it ~11x back
+		# onto the deck, so it could only ever read as a smear. The combo
+		# lighting below is procedural, sharp at any resolution and free.
+	# The deck is the only thing that samples outside [0, 1]. Wrapping keeps
+	# directional GH art facing the player; mirroring is reserved for imports
+	# whose first and last rows do not meet.
+	texture_repeat = (
+		(CanvasItem.TEXTURE_REPEAT_MIRROR
+			if _arena_highway_mirror
+			else CanvasItem.TEXTURE_REPEAT_ENABLED)
+		if _arena_mode
+		else CanvasItem.TEXTURE_REPEAT_DISABLED)
+	# The deck squeezes ~1.6 tiles of a 1024px-tall sheet into a couple hundred
+	# pixels near the horizon. Without a mip chain that far half aliases, and
+	# the aliasing crawls as the deck scrolls — which reads as wobble even once
+	# the geometry is exact. Textures with no mipmaps (the effect atlas, every
+	# stage and note sheet) are unaffected: they just keep using level 0.
+	texture_filter = (
+		CanvasItem.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		if _arena_mode
+		else CanvasItem.TEXTURE_FILTER_PARENT_NODE)
+	if _gh_mode:
+		_highway_theme = HIGHWAY_THEMES.get(
+			Settings.guitar_highway_theme, HIGHWAY_THEMES["neon"])
+	else:
+		_highway_theme = HIGHWAY_THEMES["neon"]
+
+	var bg_top := _theme_color("bg_top", BG_COLOR_TOP) if _gh_mode else BG_COLOR_TOP
+	var bg_bottom := _theme_color("bg_bottom", BG_COLOR) if _gh_mode else BG_COLOR
+	if _arena_mode:
+		bg_top = Color(0.032, 0.027, 0.024)
+		bg_bottom = Color(0.006, 0.005, 0.005)
+	_background_colors = PackedColorArray([bg_top, bg_top, bg_bottom, bg_bottom])
+	var surface_far := _theme_color("surface_far", Color(0.045, 0.04, 0.10, 0.92))
+	var surface_near := _theme_color("surface_near", Color(0.085, 0.075, 0.16, 0.96))
+	_gh_surface_colors = PackedColorArray([
+		surface_far, surface_far, surface_near, surface_near])
+
+	_pixel_stage_textures.clear()
+	_pixel_stage_frame_rects.clear()
+	if not _gh_mode or not Settings.pixel_stage_enabled:
+		return
+	for role_key in PIXEL_STAGE_FRAME_PATHS:
+		var role := String(role_key)
+		if _arena_mode and _load_arena_stage_role(role):
+			continue
+		_load_classic_stage_role(role)
+
+# Derives how the current deck art tiles. Highway sheets ship at wildly
+# different sizes (256x512 GH1 rips, 512x1024 WoR/GH5, arbitrary user imports),
+# so the tile count follows the aspect ratio instead of a fixed constant, and
+# the wrap mode follows whether the art actually meets end to end.
+func _configure_arena_highway_tiling(known_image: Image = null) -> void:
+	var texture_size := _arena_highway_texture.get_size()
+	if texture_size.x > 0.0 and texture_size.y > 0.0:
+		var aspect := texture_size.y / texture_size.x
+		_arena_highway_repeat = clampf(
+			ARENA_HIGHWAY_DECK_LENGTH / maxf(aspect, 0.05),
+			ARENA_HIGHWAY_REPEAT_MIN, ARENA_HIGHWAY_REPEAT_MAX)
+	var image := known_image
+	if image == null:
+		image = _arena_highway_texture.get_image()
+	_arena_highway_mirror = not _image_tiles_vertically(image)
+	_arena_highway_gain = _arena_highway_gain_for(image)
+	# Both values feed the cached deck slices, so the cache cannot survive them.
+	_arena_highway_scroll_phase_cached = -1000.0
+	_arena_deck_used_cached = 0
+
+# These sheets are authored for Clone Hero, which lights the deck additively at
+# runtime; drawn raw they are almost black (the WoR sheet peaks at 33% grey and
+# its 99th percentile is 0.216). Lifting by a gain measured from the art itself
+# keeps any import readable without blowing out sheets that are already bright.
+func _arena_highway_gain_for(image: Image) -> float:
+	if image == null or image.is_empty():
+		return 1.0
+	if image.is_compressed() and image.decompress() != OK:
+		return 1.0
+	var width := image.get_width()
+	var height := image.get_height()
+	if width <= 0 or height <= 0:
+		return 1.0
+	var x_step := maxi(1, width / 48)
+	var y_step := maxi(1, height / 96)
+	var samples := PackedFloat32Array()
+	for y in range(0, height, y_step):
+		for x in range(0, width, x_step):
+			var pixel := image.get_pixel(x, y)
+			# Weight by alpha so cut-out art is judged on its visible parts.
+			samples.append(
+				(0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b) * pixel.a)
+	if samples.is_empty():
+		return 1.0
+	samples.sort()
+	var peak := float(samples[mini(
+		int(float(samples.size()) * 0.99), samples.size() - 1)])
+	if peak <= 0.001:
+		return 1.0
+	return clampf(
+		ARENA_HIGHWAY_TARGET_PEAK / peak,
+		1.0, ARENA_HIGHWAY_MAX_GAIN)
+
+# True when the top and bottom rows are close enough that wrapping the art
+# leaves no visible band. Unreadable art is assumed to tile, matching the Clone
+# Hero default of `mirrored_repeat = 0`.
+func _image_tiles_vertically(image: Image) -> bool:
+	if image == null or image.is_empty():
+		return true
+	if image.is_compressed() and image.decompress() != OK:
+		return true
+	var width := image.get_width()
+	var height := image.get_height()
+	if width <= 0 or height < 2:
+		return true
+	var step := maxi(1, width / 256)
+	var seam_total := 0.0
+	var neighbour_total := 0.0
+	var samples := 0
+	for x in range(0, width, step):
+		var top := image.get_pixel(x, 0)
+		var bottom := image.get_pixel(x, height - 1)
+		var second := image.get_pixel(x, 1)
+		seam_total += (
+			absf(top.r - bottom.r) + absf(top.g - bottom.g)
+			+ absf(top.b - bottom.b) + absf(top.a - bottom.a))
+		neighbour_total += (
+			absf(top.r - second.r) + absf(top.g - second.g)
+			+ absf(top.b - second.b) + absf(top.a - second.a))
+		samples += 1
+	if samples == 0:
+		return true
+	var seam := seam_total / float(samples * 4) * 255.0
+	var neighbour := neighbour_total / float(samples * 4) * 255.0
+	# Noisy art has a large seam simply because adjacent rows differ too. Only
+	# call it non-tiling when the seam stands out from that natural variation.
+	return seam <= ARENA_HIGHWAY_SEAM_TOLERANCE or seam <= neighbour * 3.0
+
+func _load_classic_stage_role(role: String) -> void:
+	if not PIXEL_STAGE_FRAME_PATHS.has(role):
+		return
+	var frames: Array[Texture2D] = []
+	var rects: Array[Rect2] = []
+	var frame_template := String(PIXEL_STAGE_FRAME_PATHS[role])
+	var frame_count := int(PIXEL_STAGE_FRAME_COUNTS.get(role, 12))
+	for frame_index in range(frame_count):
+		var frame_path := frame_template % frame_index
+		if not ResourceLoader.exists(frame_path):
+			continue
+		var frame_texture := ResourceLoader.load(frame_path) as Texture2D
+		if frame_texture:
+			frames.append(frame_texture)
+			rects.append(_pixel_frame_used_rect(frame_texture))
+	if frames.size() == frame_count:
+		_pixel_stage_textures[role] = frames
+		_pixel_stage_frame_rects[role] = rects
+
+func _load_arena_stage_role(role: String) -> bool:
+	if not ARENA_STAGE_ATLAS_PATHS.has(role):
+		return false
+	var atlas_path := String(ARENA_STAGE_ATLAS_PATHS[role])
+	if not ResourceLoader.exists(atlas_path):
+		return false
+	var atlas := ResourceLoader.load(atlas_path) as Texture2D
+	if atlas == null:
+		return false
+	var atlas_size := atlas.get_size()
+	if atlas_size.x < ARENA_STAGE_ATLAS_COLUMNS \
+			or atlas_size.y < ARENA_STAGE_ATLAS_ROWS:
+		return false
+	var frames: Array[Texture2D] = []
+	var rects: Array[Rect2] = []
+	for frame_index in range(ARENA_STAGE_FRAME_COUNT):
+		var column := frame_index % ARENA_STAGE_ATLAS_COLUMNS
+		var row := frame_index / ARENA_STAGE_ATLAS_COLUMNS
+		var x0 := floorf(float(column) * atlas_size.x / ARENA_STAGE_ATLAS_COLUMNS)
+		var x1 := floorf(float(column + 1) * atlas_size.x / ARENA_STAGE_ATLAS_COLUMNS)
+		var y0 := floorf(float(row) * atlas_size.y / ARENA_STAGE_ATLAS_ROWS)
+		var y1 := floorf(float(row + 1) * atlas_size.y / ARENA_STAGE_ATLAS_ROWS)
+		var region := Rect2(x0, y0, x1 - x0, y1 - y0)
+		var frame := AtlasTexture.new()
+		frame.atlas = atlas
+		frame.region = region
+		frame.filter_clip = true
+		frames.append(frame)
+		rects.append(Rect2(Vector2.ZERO, region.size))
+	_pixel_stage_textures[role] = frames
+	_pixel_stage_frame_rects[role] = rects
+	return true
+
+# Returns the tight opaque bounding box of a frame in pixels. Falls back to the
+# full texture if the alpha can't be read, so anchoring never breaks.
+func _pixel_frame_used_rect(texture: Texture2D) -> Rect2:
+	var image := texture.get_image()
+	if image == null:
+		return Rect2(Vector2.ZERO, texture.get_size())
+	if image.is_compressed() and image.decompress() != OK:
+		return Rect2(Vector2.ZERO, texture.get_size())
+	var used := image.get_used_rect()
+	if used.size.x <= 0 or used.size.y <= 0:
+		return Rect2(Vector2.ZERO, texture.get_size())
+	return Rect2(used)
+
+func _theme_color(key: String, fallback: Color) -> Color:
+	var value = _highway_theme.get(key, fallback)
+	return value if value is Color else fallback
 
 # --- StyleBoxFlat caches ---
 
@@ -573,6 +1128,25 @@ func _build_ui() -> void:
 	progress_bar.add_theme_stylebox_override("fill", pb_fill)
 	hud_root.add_child(progress_bar)
 
+	# Live standings are deliberately plain and throttled. Firebase polling was
+	# the source of the old stalls; this label only changes at most 2.5 times/s.
+	if SHOW_LIVE_MULTIPLAYER_SCOREBOARD:
+		multiplayer_scoreboard_label = Label.new()
+		multiplayer_scoreboard_label.visible = (
+			BattleSession.match_loading or BattleSession.match_active)
+		multiplayer_scoreboard_label.anchor_left = 0.0
+		multiplayer_scoreboard_label.anchor_right = 0.42
+		multiplayer_scoreboard_label.anchor_top = 0.0
+		multiplayer_scoreboard_label.offset_left = _u(10)
+		multiplayer_scoreboard_label.offset_top = _u(74)
+		multiplayer_scoreboard_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+		multiplayer_scoreboard_label.add_theme_font_size_override(
+			"font_size", _fs(13))
+		multiplayer_scoreboard_label.add_theme_color_override(
+			"font_color", UITheme.TEXT_BRIGHT)
+		multiplayer_scoreboard_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud_root.add_child(multiplayer_scoreboard_label)
+
 	# FPS counter — top right, subtle
 	fps_label = Label.new()
 	fps_label.text = ""
@@ -586,13 +1160,16 @@ func _build_ui() -> void:
 
 	# Pause button — top left
 	var pause_btn := Button.new()
-	pause_btn.text = "II"
+	pause_btn.text = "×" if BattleSession.match_loading or BattleSession.match_active else "II"
 	UITheme.style_ghost_button(pause_btn, _fs(19))
 	pause_btn.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	pause_btn.offset_left = _u(10); pause_btn.offset_top = _u(10)
 	pause_btn.custom_minimum_size = Vector2(_u(68), _u(56))
 	pause_btn.mouse_filter = Control.MOUSE_FILTER_STOP
-	pause_btn.pressed.connect(_toggle_pause)
+	if BattleSession.match_loading or BattleSession.match_active:
+		pause_btn.pressed.connect(_return_to_menu)
+	else:
+		pause_btn.pressed.connect(_toggle_pause)
 	hud_root.add_child(pause_btn)
 
 	# Combo — big, positioned above hit line
@@ -928,6 +1505,8 @@ func _toggle_pause() -> void:
 		_pause_game()
 
 func _pause_game() -> void:
+	if _paused:
+		return
 	_paused = true
 	for p in audio_players:
 		p.stream_paused = true
@@ -937,61 +1516,161 @@ func _pause_game() -> void:
 		if is_instance_valid(player): player.stream_paused = true
 
 	_pause_layer = CanvasLayer.new()
+	_pause_layer.name = "PauseLayer"
 	_pause_layer.layer = 18
 	add_child(_pause_layer)
 
 	var dim := ColorRect.new()
-	dim.color = Color(0.02, 0.015, 0.05, 0.88)
+	dim.name = "PauseBackdrop"
+	dim.color = UITheme.ROCK_COAL
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	dim.theme = _create_theme()
 	_pause_layer.add_child(dim)
+	UITheme.add_hardrock_background(dim)
 
-	var vbox := VBoxContainer.new()
-	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	var pause_w := minf(_u(390), get_viewport_rect().size.x - _u(48))
-	vbox.offset_left = -pause_w * 0.5; vbox.offset_right = pause_w * 0.5
-	vbox.offset_top = -_u(210); vbox.offset_bottom = _u(210)
-	vbox.add_theme_constant_override("separation", int(_u(16)))
-	dim.add_child(vbox)
+	var safe_area := MarginContainer.new()
+	safe_area.name = "PauseSafeArea"
+	safe_area.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var safe := UITheme.safe_insets(dim)
+	safe_area.add_theme_constant_override(
+		"margin_left", int(float(safe["l"]) + _u(16)))
+	safe_area.add_theme_constant_override(
+		"margin_top", int(float(safe["t"]) + _u(16)))
+	safe_area.add_theme_constant_override(
+		"margin_right", int(float(safe["r"]) + _u(16)))
+	safe_area.add_theme_constant_override(
+		"margin_bottom", int(float(safe["b"]) + _u(16)))
+	dim.add_child(safe_area)
+
+	var center := CenterContainer.new()
+	center.name = "PauseCenter"
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	safe_area.add_child(center)
+
+	var viewport_size := get_viewport_rect().size
+	var compact_landscape := (
+		viewport_size.x > viewport_size.y * 1.20
+		and viewport_size.y < _u(700))
+	var card := PanelContainer.new()
+	card.name = "PauseCard"
+	card.custom_minimum_size.x = minf(
+		_u(720 if compact_landscape else 520),
+		maxf(_u(300), viewport_size.x - float(safe["l"]) \
+			- float(safe["r"]) - _u(42)))
+	var card_style := UITheme.card_style(UITheme.ROCK_RED)
+	card_style.bg_color = Color(
+		UITheme.ROCK_CHARRED.r, UITheme.ROCK_CHARRED.g,
+		UITheme.ROCK_CHARRED.b, 0.985)
+	card_style.border_color = UITheme.ROCK_STEEL_LIGHT
+	card_style.set_border_width_all(int(_u(2)))
+	card_style.border_width_left = int(_u(7))
+	card_style.content_margin_left = _u(24)
+	card_style.content_margin_right = _u(24)
+	card_style.content_margin_top = _u(20)
+	card_style.content_margin_bottom = _u(22)
+	card.add_theme_stylebox_override("panel", card_style)
+	center.add_child(card)
+
+	var content := VBoxContainer.new()
+	content.name = "PauseContent"
+	content.add_theme_constant_override("separation", int(_u(12)))
+	card.add_child(content)
+
+	var header := HBoxContainer.new()
+	header.name = "PauseHeader"
+	header.add_theme_constant_override("separation", int(_u(16)))
+	content.add_child(header)
+
+	var logo := UITheme.make_game_logo(_u(72 if compact_landscape else 82))
+	logo.name = "PauseLogo"
+	logo.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(logo)
+
+	var heading := VBoxContainer.new()
+	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	heading.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	heading.add_theme_constant_override("separation", int(_u(1)))
+	header.add_child(heading)
+
+	var brand := Label.new()
+	brand.name = "PauseBrand"
+	brand.text = I18n.t("app_title").to_upper()
+	brand.add_theme_font_size_override(
+		"font_size", _fs(32 if compact_landscape else 38))
+	brand.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		brand.add_theme_font_override("font", UITheme.font_bold())
+	heading.add_child(brand)
 
 	var title := Label.new()
-	title.text = I18n.t("paused")
-	title.add_theme_font_size_override("font_size", _fs(38))
-	title.add_theme_color_override("font_color", UITheme.NEON_CYAN.lightened(0.3))
-	title.add_theme_color_override("font_shadow_color", Color(UITheme.NEON_CYAN.r, UITheme.NEON_CYAN.g, UITheme.NEON_CYAN.b, 0.5))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 0)
-	title.add_theme_constant_override("shadow_outline_size", int(_u(12)))
+	title.name = "PauseTitle"
+	title.text = "//  %s" % I18n.t("paused").to_upper()
+	title.add_theme_font_size_override("font_size", _fs(16))
+	title.add_theme_color_override("font_color", UITheme.ROCK_RED.lightened(0.38))
 	if UITheme.font_bold():
 		title.add_theme_font_override("font", UITheme.font_bold())
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
+	heading.add_child(title)
 
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, _u(14))
-	vbox.add_child(spacer)
+	var key_hint := Label.new()
+	key_hint.text = "ESC / BACK"
+	key_hint.add_theme_font_size_override("font_size", _fs(12))
+	key_hint.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	key_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header.add_child(key_hint)
+
+	var divider := ColorRect.new()
+	divider.name = "PauseDivider"
+	divider.color = UITheme.ROCK_STEEL
+	divider.custom_minimum_size = Vector2(0, _u(2))
+	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(divider)
 
 	var resume_btn := Button.new()
-	resume_btn.text = I18n.t("resume")
-	UITheme.style_primary_button(resume_btn, UITheme.NEON_GREEN, _fs(23))
-	resume_btn.custom_minimum_size = Vector2(0, _u(68))
+	resume_btn.name = "PauseResumeButton"
+	resume_btn.text = "▶  %s" % I18n.t("resume").to_upper()
+	UITheme.style_primary_button(resume_btn, UITheme.ROCK_IVORY, _fs(22))
+	resume_btn.custom_minimum_size = Vector2(
+		_u(310 if compact_landscape else 0),
+		_u(142 if compact_landscape else 76))
 	resume_btn.pressed.connect(_resume_game)
-	vbox.add_child(resume_btn)
 
 	var restart_btn := Button.new()
-	restart_btn.text = I18n.t("restart")
+	restart_btn.name = "PauseRestartButton"
+	restart_btn.text = "↻  %s" % I18n.t("restart").to_upper()
 	UITheme.style_ghost_button(restart_btn, _fs(20))
-	restart_btn.custom_minimum_size = Vector2(0, _u(62))
+	restart_btn.custom_minimum_size = Vector2(0, _u(64))
 	restart_btn.pressed.connect(func(): get_tree().reload_current_scene())
-	vbox.add_child(restart_btn)
 
 	var quit_btn := Button.new()
-	quit_btn.text = I18n.t("quit_song")
+	quit_btn.name = "PauseQuitButton"
+	quit_btn.text = "×  %s" % I18n.t("quit_song").to_upper()
 	UITheme.style_danger_button(quit_btn, _fs(20))
-	quit_btn.custom_minimum_size = Vector2(0, _u(62))
-	quit_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
-	vbox.add_child(quit_btn)
+	quit_btn.custom_minimum_size = Vector2(0, _u(64))
+	quit_btn.pressed.connect(_return_to_menu)
+
+	if compact_landscape:
+		var action_row := HBoxContainer.new()
+		action_row.name = "PauseActions"
+		action_row.add_theme_constant_override("separation", int(_u(12)))
+		content.add_child(action_row)
+		resume_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		action_row.add_child(resume_btn)
+		var secondary_actions := VBoxContainer.new()
+		secondary_actions.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		secondary_actions.add_theme_constant_override("separation", int(_u(10)))
+		action_row.add_child(secondary_actions)
+		secondary_actions.add_child(restart_btn)
+		secondary_actions.add_child(quit_btn)
+	else:
+		var action_column := VBoxContainer.new()
+		action_column.name = "PauseActions"
+		action_column.add_theme_constant_override("separation", int(_u(11)))
+		content.add_child(action_column)
+		action_column.add_child(resume_btn)
+		action_column.add_child(restart_btn)
+		action_column.add_child(quit_btn)
 
 func _resume_game() -> void:
 	_paused = false
@@ -1011,121 +1690,229 @@ func _build_loading_screen() -> void:
 	add_child(loading_layer)
 
 	var bg := ColorRect.new()
-	bg.color = BG_COLOR
+	bg.color = UITheme.ROCK_COAL
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_STOP
 	loading_layer.add_child(bg)
 
-	var theme := _create_theme()
-
 	var root := Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.theme = theme
+	root.theme = _create_theme()
 	loading_layer.add_child(root)
-	UITheme.add_neon_background(root, 2)
+	UITheme.add_hardrock_background(root)
+
+	var viewport_size := get_viewport_rect().size
+	var landscape := viewport_size.x >= viewport_size.y * 1.12
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(center)
 
 	var vbox := VBoxContainer.new()
-	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	var loading_w := minf(_u(440), get_viewport_rect().size.x - _u(48))
-	vbox.offset_left = -loading_w * 0.5; vbox.offset_right = loading_w * 0.5
-	vbox.offset_top = -_u(230); vbox.offset_bottom = _u(230)
-	vbox.add_theme_constant_override("separation", 10)
-	root.add_child(vbox)
+	vbox.custom_minimum_size.x = minf(
+		_u(800 if landscape else 480), viewport_size.x - _u(40))
+	vbox.add_theme_constant_override("separation", int(_u(12)))
+	center.add_child(vbox)
 
-	# Album art
+	var loading_crest := UITheme.make_game_logo(_u(72))
+	loading_crest.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vbox.add_child(loading_crest)
+
+	var content_card := PanelContainer.new()
+	content_card.name = "LoadingContentCard"
+	var card_style := UITheme.card_style(UITheme.ROCK_RED)
+	card_style.bg_color = Color(
+		UITheme.ROCK_CHARRED.r, UITheme.ROCK_CHARRED.g, UITheme.ROCK_CHARRED.b, 0.96)
+	card_style.border_color = UITheme.ROCK_STEEL
+	card_style.set_border_width_all(int(_u(2)))
+	card_style.content_margin_left = _u(18)
+	card_style.content_margin_right = _u(18)
+	card_style.content_margin_top = _u(16)
+	card_style.content_margin_bottom = _u(18)
+	content_card.add_theme_stylebox_override("panel", card_style)
+	vbox.add_child(content_card)
+
+	var body: BoxContainer
+	if landscape:
+		body = HBoxContainer.new()
+	else:
+		body = VBoxContainer.new()
+	body.add_theme_constant_override("separation", int(_u(20)))
+	content_card.add_child(body)
+
+	var album_frame := PanelContainer.new()
+	album_frame.name = "LoadingAlbumFrame"
+	album_frame.custom_minimum_size = Vector2(
+		_u(190 if landscape else 154), _u(190 if landscape else 154))
+	album_frame.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var album_style := UITheme.flat_style(UITheme.ROCK_COAL, 2)
+	album_style.border_color = UITheme.ROCK_STEEL_LIGHT
+	album_style.set_border_width_all(int(_u(3)))
+	album_style.content_margin_left = _u(5)
+	album_style.content_margin_right = _u(5)
+	album_style.content_margin_top = _u(5)
+	album_style.content_margin_bottom = _u(5)
+	album_frame.add_theme_stylebox_override("panel", album_style)
+	body.add_child(album_frame)
+
 	var art_texture := _load_album_art_for_loading()
 	if art_texture:
 		var art_rect := TextureRect.new()
 		art_rect.texture = art_texture
-		art_rect.custom_minimum_size = Vector2(_u(150), _u(150))
 		art_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		art_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-		art_rect.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		vbox.add_child(art_rect)
+		album_frame.add_child(art_rect)
 	else:
-		var art_panel := PanelContainer.new()
-		var art_style := StyleBoxFlat.new()
-		art_style.bg_color = Color(0.12, 0.12, 0.16)
-		art_style.set_corner_radius_all(14)
-		art_panel.add_theme_stylebox_override("panel", art_style)
-		art_panel.custom_minimum_size = Vector2(_u(150), _u(150))
-		art_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		vbox.add_child(art_panel)
 		var art_icon := Label.new()
 		art_icon.text = "♪"
-		art_icon.add_theme_font_size_override("font_size", _fs(56))
-		art_icon.add_theme_color_override("font_color", Color(0.35, 0.35, 0.45))
+		art_icon.add_theme_font_size_override("font_size", _fs(58))
+		art_icon.add_theme_color_override("font_color", UITheme.ROCK_STEEL_LIGHT)
 		art_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		art_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		art_panel.add_child(art_icon)
+		album_frame.add_child(art_icon)
 
-	# Song title
+	var info := VBoxContainer.new()
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	info.add_theme_constant_override("separation", int(_u(8)))
+	body.add_child(info)
+
+	var loading_kicker := Label.new()
+	loading_kicker.text = "//  " + I18n.t("loading_stage").to_upper()
+	loading_kicker.add_theme_font_size_override("font_size", _fs(15))
+	loading_kicker.add_theme_color_override("font_color", UITheme.ROCK_AMBER_HOT)
+	if UITheme.font_bold():
+		loading_kicker.add_theme_font_override("font", UITheme.font_bold())
+	info.add_child(loading_kicker)
+
 	var parsed := _parse_loading_song_name()
 	loading_song_label = Label.new()
 	loading_song_label.text = parsed["title"]
-	loading_song_label.add_theme_font_size_override("font_size", _fs(31))
-	loading_song_label.add_theme_color_override("font_color", Color(0.95, 0.95, 1.0))
-	loading_song_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	loading_song_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	var font_bold := load("res://fonts/Inter-Bold.ttf") as Font
-	if font_bold:
-		loading_song_label.add_theme_font_override("font", font_bold)
-	vbox.add_child(loading_song_label)
+	loading_song_label.add_theme_font_size_override(
+		"font_size", _fs(32 if landscape else 27))
+	loading_song_label.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	loading_song_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if UITheme.font_bold():
+		loading_song_label.add_theme_font_override("font", UITheme.font_bold())
+	info.add_child(loading_song_label)
 
-	# Artist
 	loading_artist_label = Label.new()
 	loading_artist_label.text = parsed["artist"]
-	loading_artist_label.add_theme_font_size_override("font_size", _fs(21))
-	loading_artist_label.add_theme_color_override("font_color", Color(0.55, 0.55, 0.6))
-	loading_artist_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading_artist_label.add_theme_font_size_override("font_size", _fs(20))
+	loading_artist_label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
 	loading_artist_label.visible = parsed["artist"] != ""
-	vbox.add_child(loading_artist_label)
+	info.add_child(loading_artist_label)
 
-	# Info line: instrument + difficulty + preset
 	loading_info_label = Label.new()
-	loading_info_label.text = "%s  •  %s  •  %s" % [
-		I18n.instrument_name(song_instrument), I18n.difficulty_name(song_difficulty), I18n.preset_name(song_preset)]
-	loading_info_label.add_theme_font_size_override("font_size", _fs(18))
-	loading_info_label.add_theme_color_override("font_color", UITheme.NEON_CYAN.darkened(0.15))
-	loading_info_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(loading_info_label)
+	loading_info_label.text = "%s  /  %s  /  %s" % [
+		I18n.instrument_name(song_instrument).to_upper(),
+		I18n.difficulty_name(song_difficulty).to_upper(),
+		I18n.preset_name(song_preset).to_upper()]
+	loading_info_label.add_theme_font_size_override("font_size", _fs(16))
+	loading_info_label.add_theme_color_override("font_color", UITheme.ROCK_AMBER)
+	loading_info_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	info.add_child(loading_info_label)
 
-	# Spacer
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, _u(18))
-	vbox.add_child(spacer)
+	var readiness_tag := Label.new()
+	readiness_tag.text = I18n.t("loading_system_tag")
+	readiness_tag.add_theme_font_size_override("font_size", _fs(12))
+	readiness_tag.add_theme_color_override("font_color", UITheme.ROCK_STEEL_LIGHT)
+	readiness_tag.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	readiness_tag.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	info.add_child(readiness_tag)
 
-	# Status text
+	var status_rail := PanelContainer.new()
+	status_rail.name = "LoadingStatusRail"
+	var rail_style := UITheme.flat_style(UITheme.ROCK_COAL, 2)
+	rail_style.border_color = UITheme.ROCK_STEEL
+	rail_style.set_border_width_all(1)
+	rail_style.content_margin_left = _u(14)
+	rail_style.content_margin_right = _u(14)
+	rail_style.content_margin_top = _u(9)
+	rail_style.content_margin_bottom = _u(10)
+	status_rail.add_theme_stylebox_override("panel", rail_style)
+	vbox.add_child(status_rail)
+
+	var status_stack := VBoxContainer.new()
+	status_stack.add_theme_constant_override("separation", int(_u(7)))
+	status_rail.add_child(status_stack)
 	loading_status_label = Label.new()
 	loading_status_label.text = ""
-	loading_status_label.add_theme_font_size_override("font_size", _fs(22))
-	loading_status_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
+	loading_status_label.add_theme_font_size_override("font_size", _fs(19))
+	loading_status_label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
 	loading_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(loading_status_label)
+	loading_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_stack.add_child(loading_status_label)
 
-	# Progress bar — neon
 	loading_bar = ProgressBar.new()
 	loading_bar.show_percentage = false
 	loading_bar.max_value = 100
-	loading_bar.custom_minimum_size = Vector2(0, _u(10))
+	loading_bar.custom_minimum_size = Vector2(0, _u(13))
 	loading_bar.visible = false
-
-	var bar_style := UITheme.flat_style(Color(0.12, 0.11, 0.20), 4)
+	var bar_style := UITheme.flat_style(UITheme.ROCK_CHARRED, 2)
+	bar_style.border_color = UITheme.ROCK_STEEL
+	bar_style.set_border_width_all(1)
 	loading_bar.add_theme_stylebox_override("background", bar_style)
-	var bar_fill := UITheme.flat_style(UITheme.NEON_CYAN, 4)
+	var bar_fill := UITheme.flat_style(UITheme.ROCK_AMBER, 2)
+	bar_fill.border_color = UITheme.ROCK_AMBER_HOT
+	bar_fill.set_border_width_all(1)
 	loading_bar.add_theme_stylebox_override("fill", bar_fill)
-	vbox.add_child(loading_bar)
+	status_stack.add_child(loading_bar)
+
+	loading_countdown_plate = PanelContainer.new()
+	loading_countdown_plate.name = "LoadingCountdownPlate"
+	loading_countdown_plate.visible = false
+	loading_countdown_plate.custom_minimum_size = Vector2(_u(154), _u(124))
+	loading_countdown_plate.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var countdown_style := UITheme.flat_style(UITheme.ROCK_IRON, 2)
+	countdown_style.border_color = UITheme.ROCK_AMBER
+	countdown_style.set_border_width_all(int(_u(2)))
+	loading_countdown_plate.add_theme_stylebox_override("panel", countdown_style)
+	vbox.add_child(loading_countdown_plate)
+	loading_countdown_label = Label.new()
+	loading_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	loading_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	loading_countdown_label.add_theme_font_size_override("font_size", _fs(88))
+	loading_countdown_label.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	loading_countdown_label.add_theme_color_override(
+		"font_shadow_color", Color(UITheme.ROCK_RED.r, UITheme.ROCK_RED.g, UITheme.ROCK_RED.b, 0.74))
+	loading_countdown_label.add_theme_constant_override("shadow_outline_size", int(_u(8)))
+	if UITheme.font_bold():
+		loading_countdown_label.add_theme_font_override("font", UITheme.font_bold())
+	loading_countdown_plate.add_child(loading_countdown_label)
 
 	# Back button on loading screen
 	var loading_back := Button.new()
+	loading_back.name = "LoadingBackButton"
 	loading_back.text = "‹  " + I18n.t("back")
-	UITheme.style_ghost_button(loading_back, 16)
+	UITheme.style_danger_button(loading_back, _fs(17))
 	loading_back.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	loading_back.offset_left = _u(12); loading_back.offset_top = _u(10)
-	loading_back.custom_minimum_size = Vector2(_u(68), _u(54))
+	var safe := UITheme.safe_insets(root)
+	loading_back.offset_left = float(safe["l"]) + _u(12)
+	loading_back.offset_top = float(safe["t"]) + _u(10)
+	loading_back.custom_minimum_size = Vector2(_u(124), _u(62))
 	loading_back.add_theme_font_size_override("font_size", _fs(18))
 	loading_back.pressed.connect(_on_loading_back)
 	root.add_child(loading_back)
+
+func _show_loading_countdown(value: int) -> void:
+	if loading_countdown_plate == null or loading_countdown_label == null:
+		return
+	var text_value := str(maxi(1, value))
+	var changed := loading_countdown_label.text != text_value
+	loading_countdown_label.text = text_value
+	loading_countdown_plate.visible = true
+	if changed:
+		loading_countdown_plate.pivot_offset = loading_countdown_plate.size * 0.5
+		loading_countdown_plate.scale = Vector2(1.10, 1.10)
+		var impact := create_tween()
+		impact.tween_property(
+			loading_countdown_plate, "scale", Vector2.ONE, 0.14
+		).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+func _hide_loading_countdown() -> void:
+	if loading_countdown_plate:
+		loading_countdown_plate.visible = false
 
 func _on_loading_back() -> void:
 	# Cancel any in-progress decode
@@ -1133,6 +1920,11 @@ func _on_loading_back() -> void:
 		var plugin = Engine.get_singleton("NativeAudioDecoder")
 		plugin.call("cancelDecode")
 	is_loading = false
+	_return_to_menu()
+
+func _return_to_menu() -> void:
+	if BattleSession.session_state != "idle":
+		BattleSession.leave_room()
 	get_tree().change_scene_to_file("res://scenes/menu.tscn")
 
 func _parse_loading_song_name() -> Dictionary:
@@ -1212,11 +2004,15 @@ func _load_song() -> void:
 	var sng_loader: RefCounted = null
 	var parse_ok := false
 	var parsed_notes: Array = []
+	var parsed_vocals: Array = []
+	var parsed_vocal_phrases: Array = []
 	var parsed_lyrics: Array = []
 	var parsed_overdrive: Array = []
 	var parsed_solos: Array = []
 	var parsed_resolution: int = 480
 	var parsed_bpm: Array = []
+	var stage_chart_text := ""
+	var stage_midi_data := PackedByteArray()
 
 	var chart_offset_sec := 0.0
 
@@ -1229,6 +2025,7 @@ func _load_song() -> void:
 		if sng_loader.has_chart():
 			var parser = ChartParserScript.new()
 			var chart_text: String = sng_loader.get_chart_text()
+			stage_chart_text = chart_text
 			parse_ok = parser.parse_text(chart_text, difficulty, song_instrument)
 			if parse_ok:
 				parsed_notes = parser.notes
@@ -1242,6 +2039,7 @@ func _load_song() -> void:
 		if not parse_ok and sng_loader.has_midi():
 			var midi_parser = MidiParserScript.new()
 			var midi_data: PackedByteArray = sng_loader.get_midi_data()
+			stage_midi_data = midi_data
 			parse_ok = midi_parser.parse_data(midi_data, difficulty, song_instrument)
 			if parse_ok:
 				parsed_notes = midi_parser.notes
@@ -1250,6 +2048,8 @@ func _load_song() -> void:
 				parsed_solos = midi_parser.solo_sections
 				parsed_resolution = midi_parser.resolution
 				parsed_bpm = midi_parser.bpm_events
+				parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+				parsed_vocal_phrases = midi_parser.vocal_phrases
 				print("Game: parsed .mid from .sng (instrument=%s)" % song_instrument)
 		if not parse_ok:
 			push_error("Game: no chart or midi in .sng"); return
@@ -1278,6 +2078,8 @@ func _load_song() -> void:
 		parsed_solos = midi_parser.solo_sections
 		parsed_resolution = midi_parser.resolution
 		parsed_bpm = midi_parser.bpm_events
+		parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+		parsed_vocal_phrases = midi_parser.vocal_phrases
 
 	elif _is_stfs_source(source):
 		# CON/LIVE: parse MIDI from container, use pre-imported audio
@@ -1287,6 +2089,7 @@ func _load_song() -> void:
 		var midi_data := stfs.get_midi_data()
 		if midi_data.is_empty():
 			push_error("Game: no MIDI in CON"); return
+		stage_midi_data = midi_data
 		var midi_parser = MidiParserScript.new()
 		parse_ok = midi_parser.parse_data(midi_data, difficulty, song_instrument)
 		if not parse_ok:
@@ -1297,6 +2100,8 @@ func _load_song() -> void:
 		parsed_solos = midi_parser.solo_sections
 		parsed_resolution = midi_parser.resolution
 		parsed_bpm = midi_parser.bpm_events
+		parsed_vocals = midi_parser.vocal_parts.get("lead", [])
+		parsed_vocal_phrases = midi_parser.vocal_phrases
 		# Use pre-imported audio from user://songs/ (MOGG decrypt is too slow for main thread)
 		# Extract only unencrypted MOGGs on-the-fly; encrypted ones must be imported first
 		var mogg_data := stfs.get_mogg_data()
@@ -1333,9 +2138,14 @@ func _load_song() -> void:
 		print("Game: chart offset = %.1f ms" % _chart_offset_ms)
 
 	notes = parsed_notes
+	vocal_notes = parsed_vocals
+	vocal_phrases = parsed_vocal_phrases
+	_setup_vocals_mode()
 	lyric_phrases = parsed_lyrics
 	overdrive_phrases = parsed_overdrive
 	solo_sections = parsed_solos
+	_prepare_stage_event_tracks(
+		source, parsed_notes, difficulty, stage_chart_text, stage_midi_data)
 
 	# Piano mode: fold lane 4 (orange) into the 4 lanes BEFORE playability,
 	# so the same-lane spacing rules see the final lane layout.
@@ -1364,6 +2174,7 @@ func _load_song() -> void:
 	note_state.resize(notes.size())
 	note_state.fill(0)
 	first_visible_idx = 0
+	_first_drawn_idx = 0
 	current_phrase_idx = 0
 	total_notes = notes.size()
 	hit_count = 0
@@ -1410,6 +2221,81 @@ func _load_song() -> void:
 			_prepare_audio(tmp_dir)
 		else:
 			_prepare_audio(audio_dir)
+
+func _prepare_stage_event_tracks(source: String, selected_notes: Array,
+		selected_difficulty: String, chart_text: String,
+		midi_data: PackedByteArray) -> void:
+	_stage_note_tracks.clear()
+	_stage_note_indices.clear()
+	_stage_last_event_ms.clear()
+	_stage_visible_roles.clear()
+
+	var available := song_available_instruments.duplicate(true)
+	if available.is_empty():
+		available[song_instrument] = [selected_difficulty]
+
+	for role in ["guitarist", "drummer", "bassist"]:
+		var instrument := String(PIXEL_STAGE_ROLE_INSTRUMENTS[role])
+		if not available.has(instrument):
+			continue
+		_stage_visible_roles.append(role)
+
+		var event_notes: Array
+		if instrument == song_instrument:
+			event_notes = selected_notes.duplicate(true)
+		else:
+			var stage_difficulty := _stage_difficulty_for(
+				instrument, selected_difficulty, available)
+			event_notes = _parse_stage_instrument_notes(
+				source, instrument, stage_difficulty, chart_text, midi_data)
+		if not event_notes.is_empty():
+			_stage_note_tracks[role] = event_notes
+			_stage_note_indices[role] = 0
+			_stage_last_event_ms[role] = -10000.0
+
+	if not lyric_phrases.is_empty():
+		# Keep the vocalist next to the instrument that drives the current
+		# chart. The singer switches to performance frames only during lyrics.
+		var insert_at := mini(1, _stage_visible_roles.size())
+		_stage_visible_roles.insert(insert_at, "vocalist")
+
+	print("Pixel stage: roles=%s event_tracks=%s" % [
+		str(_stage_visible_roles), str(_stage_note_tracks.keys())])
+
+func _stage_difficulty_for(instrument: String, preferred: String,
+		available: Dictionary) -> String:
+	var difficulties: Array = available.get(instrument, [])
+	if preferred in difficulties:
+		return preferred
+	for candidate in ["Expert", "Hard", "Medium", "Easy"]:
+		if candidate in difficulties:
+			return candidate
+	return preferred
+
+func _parse_stage_instrument_notes(source: String, instrument: String,
+		difficulty: String, chart_text: String,
+		midi_data: PackedByteArray) -> Array:
+	if chart_text != "":
+		var chart_parser = ChartParserScript.new()
+		if chart_parser.parse_text(chart_text, difficulty, instrument):
+			return chart_parser.notes.duplicate(true)
+		return []
+
+	var lower_source := source.to_lower()
+	if lower_source.ends_with(".chart"):
+		var chart_parser = ChartParserScript.new()
+		if chart_parser.parse_file(source, difficulty, instrument):
+			return chart_parser.notes.duplicate(true)
+		return []
+
+	var midi_parser = MidiParserScript.new()
+	if not midi_data.is_empty():
+		if midi_parser.parse_data(midi_data, difficulty, instrument):
+			return midi_parser.notes.duplicate(true)
+	elif lower_source.ends_with(".mid"):
+		if midi_parser.parse_file(source, difficulty, instrument):
+			return midi_parser.notes.duplicate(true)
+	return []
 
 # Precompute beat timestamps (ms) from the tempo map for scrolling beat lines.
 func _build_beat_times(bpm_events: Array, res: int) -> void:
@@ -1703,7 +2589,12 @@ func _setup_single_player(stream: AudioStream) -> void:
 	master_player = player
 	print("Audio: 1 player ready")
 	is_loading = false
-	_countdown = 3.0
+	if BattleSession.match_loading or BattleSession.match_active:
+		_countdown = -1.0
+		loading_status = I18n.t("multiplayer_waiting_players")
+		BattleSession.notify_game_loaded()
+	else:
+		_countdown = 3.0
 
 
 func _decode_android_async(inputs: Array[String], output: String) -> void:
@@ -1727,7 +2618,7 @@ func _decode_android_async(inputs: Array[String], output: String) -> void:
 
 func _on_decode_progress(pct: int, stage: String) -> void:
 	loading_progress = pct
-	loading_status = stage
+	loading_status = I18n.decode_stage(stage)
 
 func _on_decode_done(wav_path: String) -> void:
 	print("Audio: decode_done — %s" % wav_path)
@@ -1887,8 +2778,6 @@ func _prepare_gameplay_sections() -> void:
 	_crowd_ambience_boost_timer = 0.0
 	_overdrive_energy = 0.0
 	_overdrive_active = false
-	if debug_infinite_overdrive and OS.is_debug_build():
-		_overdrive_energy = 1.0
 
 	# Plain MIDI files and older .chart files often omit authored Overdrive.
 	# Create sparse eight-note phrases so the mechanic still exists, while
@@ -1959,15 +2848,20 @@ func _register_gameplay_miss(note_idx: int) -> void:
 	if solo_idx >= 0 and solo_idx < _solo_states.size():
 		_solo_states[solo_idx]["miss"] = int(_solo_states[solo_idx]["miss"]) + 1
 
+# The hidden unlock is single player only. A live or loading multiplayer match
+# always wins, so it can never be used against other players.
+func _unlimited_overdrive_active() -> bool:
+	if BattleSession.match_active or BattleSession.match_loading:
+		return false
+	return Settings.unlimited_overdrive
+
 func _activate_overdrive() -> void:
 	if not song_started or _paused:
 		return
 	if _overdrive_active:
-		if debug_infinite_overdrive and OS.is_debug_build():
-			_overdrive_active = false
-			_update_overdrive_ui()
 		return
-	if _overdrive_energy < OVERDRIVE_ACTIVATION_MIN:
+	if _overdrive_energy < OVERDRIVE_ACTIVATION_MIN \
+			and not _unlimited_overdrive_active():
 		return
 	_overdrive_active = true
 	_show_milestone(I18n.t("overdrive_active"))
@@ -1983,15 +2877,13 @@ func _update_overdrive_ui() -> void:
 	if overdrive_bar:
 		overdrive_bar.value = _overdrive_energy
 	if overdrive_button:
-		var infinite_debug := debug_infinite_overdrive and OS.is_debug_build()
-		var new_state := 3 if _overdrive_active and infinite_debug else \
-			(2 if _overdrive_active else (1 if _overdrive_energy >= OVERDRIVE_ACTIVATION_MIN else 0))
+		var new_state := 2 if _overdrive_active else (1 if _overdrive_energy >= OVERDRIVE_ACTIVATION_MIN else 0)
 		if new_state == _overdrive_ui_state:
 			return
 		_overdrive_ui_state = new_state
 		overdrive_button.disabled = new_state == 2 or new_state == 0
 		if new_state >= 2:
-			overdrive_button.text = I18n.t("overdrive_stop") if infinite_debug else I18n.t("overdrive_active")
+			overdrive_button.text = I18n.t("overdrive_active")
 			overdrive_button.modulate = Color(1.0, 0.72, 1.0)
 		elif new_state == 1:
 			overdrive_button.text = I18n.t("overdrive_ready")
@@ -2002,13 +2894,13 @@ func _update_overdrive_ui() -> void:
 
 func _update_gameplay_sections(delta: float) -> void:
 	if _overdrive_active:
-		if not (debug_infinite_overdrive and OS.is_debug_build()):
-			_overdrive_energy = maxf(0.0, _overdrive_energy - OVERDRIVE_DRAIN_PER_SEC * delta)
-		if _overdrive_energy <= 0.0:
-			_overdrive_active = false
-		_update_overdrive_ui()
-	elif debug_infinite_overdrive and OS.is_debug_build() and _overdrive_energy < 1.0:
-		_overdrive_energy = 1.0
+		if _unlimited_overdrive_active():
+			_overdrive_energy = 1.0
+		else:
+			_overdrive_energy = maxf(
+				0.0, _overdrive_energy - OVERDRIVE_DRAIN_PER_SEC * delta)
+			if _overdrive_energy <= 0.0:
+				_overdrive_active = false
 		_update_overdrive_ui()
 
 	var new_solo_idx := -1
@@ -2246,6 +3138,10 @@ func _ensure_sfx_audio_bus() -> void:
 	AudioServer.set_bus_volume_db(bus_idx, SFX_BUS_GAIN_DB)
 
 func _setup_miss_sfx() -> void:
+	# The bundled cue is a guitar-specific fret/string mistake. Drums, keys,
+	# vocals and bass must never trigger or duck the mix for this sample.
+	if song_instrument != "guitar":
+		return
 	if not Settings.miss_sfx_enabled or not ResourceLoader.exists(MISS_SFX_PATH):
 		return
 	_ensure_sfx_audio_bus()
@@ -2531,6 +3427,37 @@ func _vfx_special_stride() -> int:
 func _vfx_heavy_enabled() -> bool:
 	return _effective_vfx_quality() != "performance"
 
+func _sustain_lightning_segment_count() -> int:
+	match _effective_vfx_quality():
+		"full": return 9
+		"performance": return 5
+		_: return 7
+
+func _sustain_lightning_preview_cap() -> int:
+	match _effective_vfx_quality():
+		"full": return 6
+		"performance": return 2
+		_: return 4
+
+func _sustain_lightning_filament_count(is_holding: bool) -> int:
+	match _effective_vfx_quality():
+		"full": return 3 if is_holding else 2
+		"performance": return 1
+		_: return 2 if is_holding else 1
+
+func _sustain_lightning_intensity(duration_ms: float, time_until_ms: float,
+		approach_ms: float, is_holding: bool, is_hit: bool = false) -> float:
+	if duration_ms < SUSTAIN_LIGHTNING_MIN_DURATION_MS or is_hit or approach_ms <= 0.0:
+		return 0.0
+	var pulse := 0.5 + 0.5 * sin(_frame_time_sec * 15.0)
+	if is_holding:
+		return 0.82 + pulse * 0.18
+	# Fade in shortly after the head enters the highway. Keeping the preview
+	# below half strength makes the held state read as a clear escalation.
+	var travel := clampf(1.0 - time_until_ms / approach_ms, 0.0, 1.0)
+	var arrival_ramp := smoothstep(0.04, 0.62, travel)
+	return arrival_ramp * (0.24 + pulse * 0.14)
+
 func _change_rock_meter(amount: float) -> void:
 	if _rock_meter_mode == "off" or _song_failed:
 		return
@@ -2584,7 +3511,14 @@ func _update_adaptive_vfx(delta: float) -> void:
 func _process(delta: float) -> void:
 	_frame_time_msec = float(Time.get_ticks_msec())
 	_frame_time_sec = _frame_time_msec / 1000.0
+	_update_live_multiplayer_scoreboard(delta)
+	if _arena_mode:
+		var arena_target := _arena_combo_energy(combo)
+		var arena_response := 4.2 if arena_target < _arena_combo_energy_display else 7.5
+		_arena_combo_energy_display = move_toward(
+			_arena_combo_energy_display, arena_target, delta * arena_response)
 	if is_loading:
+		_hide_loading_countdown()
 		if loading_status_label:
 			# Animated dots
 			loading_dots_timer += delta
@@ -2596,23 +3530,36 @@ func _process(delta: float) -> void:
 		queue_redraw()
 		return
 
-	# State: countdown before play — giant neon number
+	# State: countdown before play — stamped hard-rock stage plate.
 	if _countdown > 0:
 		_countdown -= delta
+		_show_loading_countdown(ceili(_countdown))
 		if loading_status_label:
-			loading_status_label.text = str(ceili(_countdown))
-			loading_status_label.add_theme_font_size_override("font_size", 104)
-			loading_status_label.add_theme_color_override("font_color", UITheme.NEON_CYAN.lightened(0.25))
-			loading_status_label.add_theme_color_override("font_shadow_color", Color(UITheme.NEON_CYAN.r, UITheme.NEON_CYAN.g, UITheme.NEON_CYAN.b, 0.55))
-			loading_status_label.add_theme_constant_override("shadow_offset_x", 0)
-			loading_status_label.add_theme_constant_override("shadow_offset_y", 0)
-			loading_status_label.add_theme_constant_override("shadow_outline_size", 18)
-			if UITheme.font_bold():
-				loading_status_label.add_theme_font_override("font", UITheme.font_bold())
+			loading_status_label.text = I18n.t("loading_stage").to_upper()
 		if loading_bar:
 			loading_bar.visible = false
 		queue_redraw()
 		if _countdown <= 0:
+			_hide_loading_screen()
+			_start_playback()
+		return
+
+	# Multiplayer loading uses a host-scheduled clock. All devices finish audio
+	# preparation first, then enter the same countdown tick.
+	if not song_started and (BattleSession.match_loading or BattleSession.match_active):
+		var remaining := BattleSession.get_start_seconds()
+		if loading_status_label:
+			if remaining < 0.0:
+				_hide_loading_countdown()
+				loading_status_label.text = I18n.t(
+					"multiplayer_waiting_players").to_upper()
+			else:
+				loading_status_label.text = I18n.t("loading_stage").to_upper()
+				_show_loading_countdown(maxi(1, ceili(remaining)))
+		if loading_bar:
+			loading_bar.visible = false
+		queue_redraw()
+		if BattleSession.start_local_tick_msec > 0 and remaining <= 0.0:
 			_hide_loading_screen()
 			_start_playback()
 		return
@@ -2626,6 +3573,20 @@ func _process(delta: float) -> void:
 	_update_adaptive_vfx(delta)
 
 	song_time_ms = _get_song_time_ms()
+	if BattleSession.match_active:
+		_multiplayer_state_elapsed += delta
+		if _multiplayer_state_elapsed >= MULTIPLAYER_STATE_INTERVAL:
+			_multiplayer_state_elapsed = fmod(
+				_multiplayer_state_elapsed, MULTIPLAYER_STATE_INTERVAL)
+			BattleSession.submit_gameplay_state({
+				"score": score,
+				"combo": combo,
+				"health": _rock_meter_value,
+				"song_ms": int(song_time_ms),
+			})
+	else:
+		_multiplayer_state_elapsed = 0.0
+	_update_stage_event_cursors()
 	# Finale owns the next available crowd-reaction slot. Process it before the
 	# normal pending-boo queue so an old reaction cannot steal the song ending.
 	_update_ending_crowd()
@@ -2668,12 +3629,10 @@ func _process(delta: float) -> void:
 				_combo_popup_tw.kill()
 			combo_label.modulate.a = 0.0
 
-	# Advance first_visible_idx past notes way off-screen
-	while first_visible_idx < notes.size():
-		var t: float = notes[first_visible_idx]["time_ms"]
-		if song_time_ms - t < _approach_time_ms() + HIT_LINGER_MS:
-			break
-		first_visible_idx += 1
+	_advance_note_cursors()
+
+	if _vocals_mode:
+		_update_vocals(delta)
 
 	# Update sustain holds
 	_update_sustains()
@@ -2715,6 +3674,9 @@ func _process(delta: float) -> void:
 		_beat_idx += 1
 		_beat_pulse = 1.0
 	_beat_pulse = maxf(0.0, _beat_pulse - delta * 4.5)
+	_arena_collapse = maxf(0.0, _arena_collapse - delta * ARENA_COLLAPSE_DECAY)
+	_arena_tier_wave = maxf(
+		0.0, _arena_tier_wave - delta * ARENA_TIER_WAVE_DECAY)
 
 	# Hit particles — gravity + lifetime
 	var i_p := 0
@@ -2798,6 +3760,38 @@ func _process(delta: float) -> void:
 		return
 
 	queue_redraw()
+
+func _update_stage_event_cursors() -> void:
+	for role_key in _stage_note_tracks:
+		var role := String(role_key)
+		var track: Array = _stage_note_tracks[role]
+		var event_index := int(_stage_note_indices.get(role, 0))
+		while event_index < track.size():
+			var event_time := float(track[event_index].get("time_ms", 0.0))
+			if event_time > song_time_ms:
+				break
+			_stage_last_event_ms[role] = event_time
+			event_index += 1
+		_stage_note_indices[role] = event_index
+
+# Retires notes that have scrolled well past the player. Two cursors, both
+# monotonic: gameplay clears a note once its head has aged out, drawing clears
+# it only once its tail has, so a long sustain stays visible for its whole
+# length instead of vanishing off the top of the highway mid-hold.
+func _advance_note_cursors() -> void:
+	var linger_ms := _approach_time_ms() + HIT_LINGER_MS
+	while first_visible_idx < notes.size():
+		var head_t: float = notes[first_visible_idx]["time_ms"]
+		if song_time_ms - head_t < linger_ms:
+			break
+		first_visible_idx += 1
+	while _first_drawn_idx < first_visible_idx:
+		var drawn_note = notes[_first_drawn_idx]
+		var tail_t: float = float(drawn_note["time_ms"]) \
+			+ float(drawn_note["duration_ms"])
+		if song_time_ms - tail_t < linger_ms:
+			break
+		_first_drawn_idx += 1
 
 func _update_sustains() -> void:
 	for lane in range(lane_count):
@@ -3120,6 +4114,80 @@ func _cache_render_geometry() -> void:
 	var bottom_left := Vector2(center_x + (left_bottom - center_x) / z_bottom, vp.y)
 	_gh_surface_points = PackedVector2Array([
 		top_left, top_right, bottom_right, bottom_left])
+	# A single textured quad makes portrait highway art look pasted onto the
+	# trapezoid because CanvasItem UV interpolation is affine. Both the deck and
+	# the effect overlay are therefore sliced by depth.
+	_arena_highway_v_span = _arena_highway_base_v(z_bottom)
+	# Effect overlay: one atlas frame stretched across the whole deck and pinned
+	# to it, so these slices stay fixed on screen (Clone Hero's
+	# `scale_full_highway_length = 1`, `scrolling_enabled = 0`).
+	_arena_highway_strips.clear()
+	_arena_effect_strip_uvs_a.clear()
+	_arena_effect_strip_uvs_b.clear()
+	_arena_highway_strip_depth.resize(ARENA_HIGHWAY_STRIP_COUNT + 1)
+	for row_index in range(ARENA_HIGHWAY_STRIP_COUNT + 1):
+		_arena_highway_strip_depth[row_index] = (
+			_arena_highway_v_span
+			* float(row_index) / float(ARENA_HIGHWAY_STRIP_COUNT))
+	var empty_uvs := PackedVector2Array([
+		Vector2.ZERO, Vector2.ZERO, Vector2.ZERO, Vector2.ZERO])
+	for strip_index in range(ARENA_HIGHWAY_STRIP_COUNT):
+		_arena_highway_strips.append(_arena_highway_quad(
+			float(_arena_highway_strip_depth[strip_index]),
+			float(_arena_highway_strip_depth[strip_index + 1]),
+			center_x, left_bottom, right_bottom))
+		_arena_effect_strip_uvs_a.append(empty_uvs.duplicate())
+		_arena_effect_strip_uvs_b.append(empty_uvs.duplicate())
+	# Scrolling deck: slice edges are pinned to texture rows, so their UVs are
+	# constant and only the geometry moves. Sized for the worst case, one extra
+	# slice for the partial one clipped by the horizon.
+	var slice_span := 1.0 / float(ARENA_HIGHWAY_SLICES_PER_TILE)
+	_arena_deck_slice_count = int(ceil(_arena_highway_v_span / slice_span)) + 1
+	_arena_deck_slices.clear()
+	_arena_deck_slice_uvs.clear()
+	for slice_index in range(_arena_deck_slice_count):
+		_arena_deck_slices.append(empty_uvs.duplicate())
+		_arena_deck_slice_uvs.append(empty_uvs.duplicate())
+	_arena_deck_used_cached = 0
+	_arena_highway_scroll_phase_cached = -1000.0
+	_arena_effect_frame_a_cached = -1
+	_arena_effect_frame_b_cached = -1
+	_arena_lane_panels.clear()
+	_arena_lane_cores.clear()
+	for lane_index in range(lane_count):
+		var lane_left := left_bottom + lane_index * _cached_lane_width
+		var lane_right := lane_left + _cached_lane_width
+		var panel_inset := _cached_lane_width * 0.075
+		_arena_lane_panels.append(PackedVector2Array([
+			Vector2(
+				center_x + (lane_left + panel_inset - center_x) / z_far,
+				horizon_y),
+			Vector2(
+				center_x + (lane_right - panel_inset - center_x) / z_far,
+				horizon_y),
+			Vector2(
+				center_x + (lane_right - panel_inset - center_x) / z_bottom,
+				vp.y),
+			Vector2(
+				center_x + (lane_left + panel_inset - center_x) / z_bottom,
+				vp.y),
+		]))
+		var lane_center := lane_left + _cached_lane_width * 0.5
+		var core_half_width := _cached_lane_width * 0.055
+		_arena_lane_cores.append(PackedVector2Array([
+			Vector2(
+				center_x + (lane_center - core_half_width - center_x) / z_far,
+				horizon_y),
+			Vector2(
+				center_x + (lane_center + core_half_width - center_x) / z_far,
+				horizon_y),
+			Vector2(
+				center_x + (lane_center + core_half_width - center_x) / z_bottom,
+				vp.y),
+			Vector2(
+				center_x + (lane_center - core_half_width - center_x) / z_bottom,
+				vp.y),
+		]))
 	_gh_combo_left_points = PackedVector2Array([
 		top_left, top_left.lerp(top_right, 0.13),
 		bottom_left.lerp(bottom_right, 0.13), bottom_left])
@@ -3144,8 +4212,9 @@ func _cache_render_geometry() -> void:
 		vignette_clear, vignette_dark, vignette_dark, vignette_clear])
 
 	var fade_height := vp.y * 0.16
-	var fade_top := Color(BG_COLOR_TOP.r, BG_COLOR_TOP.g, BG_COLOR_TOP.b, 1.0)
-	var fade_bottom := Color(BG_COLOR_TOP.r, BG_COLOR_TOP.g, BG_COLOR_TOP.b, 0.0)
+	var fade_base := _theme_color("bg_top", BG_COLOR_TOP) if _gh_mode else BG_COLOR_TOP
+	var fade_top := Color(fade_base.r, fade_base.g, fade_base.b, 1.0)
+	var fade_bottom := Color(fade_base.r, fade_base.g, fade_base.b, 0.0)
 	_spawn_fade_points = PackedVector2Array([
 		Vector2.ZERO, Vector2(vp.x, 0.0),
 		Vector2(vp.x, fade_height), Vector2(0.0, fade_height)])
@@ -3165,17 +4234,23 @@ func _draw() -> void:
 
 	_draw_starfield(vp)
 
-	if _gh_mode:
+	if _vocals_mode:
+		# The pitch board is its own node; nothing else on the deck applies.
+		pass
+	elif _gh_mode:
+		if Settings.pixel_stage_enabled:
+			_draw_pixel_stage(vp)
 		_draw_gh_highway(vp)
 	else:
 		_draw_flat_highway(vp)
-	_draw_overdrive_overlay(vp)
+	if not _vocals_mode:
+		_draw_overdrive_overlay(vp)
 
-	# One-shot sprite effects (hits, misses, rings) + lightning
-	_draw_sprite_fx()
-	_draw_bolts()
+		# One-shot sprite effects (hits, misses, rings) + lightning
+		_draw_sprite_fx()
+		_draw_bolts()
 
-	_draw_particles()
+		_draw_particles()
 
 	# Miss flash — red edges (thick + visible)
 	if _miss_flash_alpha > 0:
@@ -3320,6 +4395,55 @@ func _draw_bolts() -> void:
 		draw_polyline(pts, Color(c.r, c.g, c.b, 0.55 * a), 3.0)
 		draw_polyline(pts, Color(1, 1, 1, 0.9 * a), 1.3)
 
+func _sustain_lightning_points(from: Vector2, to: Vector2, note_index: int,
+		lane: int, filament: int, segments: int, amplitude: float) -> PackedVector2Array:
+	segments = maxi(3, segments)
+	var points := PackedVector2Array()
+	var axis := to - from
+	var length := axis.length()
+	if length < 0.001:
+		points.append(from)
+		points.append(to)
+		return points
+	var normal := Vector2(-axis.y, axis.x) / length
+	var seed := float(note_index * 37 + lane * 101 + filament * 211)
+	var phase := _frame_time_sec * (15.0 + filament * 1.7) + seed * 0.071
+	for segment_index in range(segments + 1):
+		var progress := float(segment_index) / float(segments)
+		var point := from.lerp(to, progress)
+		if segment_index > 0 and segment_index < segments:
+			# Two incommensurate waves create an electric kink without RNG. The
+			# same note at the same frame always yields the same path.
+			var wave := sin(phase + progress * (11.0 + filament * 0.8))
+			wave += 0.48 * sin(phase * 1.71 - progress * 19.0 + seed * 0.013)
+			var envelope := sin(PI * progress)
+			point += normal * amplitude * (wave / 1.48) * envelope
+		points.append(point)
+	return points
+
+func _draw_sustain_lightning_column(from: Vector2, to: Vector2, color: Color,
+		intensity: float, note_index: int, lane: int, is_holding: bool) -> void:
+	var length := from.distance_to(to)
+	if intensity <= 0.01 or length < 8.0:
+		return
+	var quality := _effective_vfx_quality()
+	var base_width := maxf(1.0, minf(_lane_width() * 0.028, length * 0.025))
+	var amplitude := maxf(2.0, minf(_lane_width() * 0.095, length * 0.08))
+	var filament_count := _sustain_lightning_filament_count(is_holding)
+	for filament in range(filament_count):
+		var filament_strength := 1.0 if filament == 0 else 0.56
+		var path := _sustain_lightning_points(
+			from, to, note_index, lane, filament,
+			_sustain_lightning_segment_count(), amplitude * (1.0 + filament * 0.18))
+		var alpha := intensity * filament_strength
+		if quality != "performance":
+			draw_polyline(path, Color(color.r, color.g, color.b, 0.14 * alpha),
+				base_width * 5.0)
+		draw_polyline(path, Color(color.r, color.g, color.b, 0.68 * alpha),
+			base_width * 1.9)
+		draw_polyline(path, Color(1.0, 1.0, 1.0, 0.94 * alpha),
+			maxf(0.8, base_width * 0.62))
+
 func _draw_sprite_fx() -> void:
 	for fx in _sprite_fx:
 		var fx_name: String = fx["name"]
@@ -3330,6 +4454,13 @@ func _draw_sprite_fx() -> void:
 
 # Low-profile metal fret note (Guitar Mode), tinted by lane color.
 func _draw_gh_fret(center: Vector2, radius: float, col: Color, alpha: float, hit: bool) -> void:
+	if _arena_mode:
+		_draw_arena_fret(center, radius, col, alpha, hit)
+		return
+	_draw_original_gh_fret(center, radius, col, alpha, hit)
+
+func _draw_original_gh_fret(
+		center: Vector2, radius: float, col: Color, alpha: float, hit: bool) -> void:
 	if radius < 1.5:
 		return
 	var texture := VFX.tex("gh_fret")
@@ -3350,6 +4481,281 @@ func _draw_gh_fret(center: Vector2, radius: float, col: Color, alpha: float, hit
 	var modulate := col.darkened(0.55) if hit else col.lightened(0.08)
 	draw_texture_rect(texture, Rect2(center - fret_size * 0.5, fret_size), false,
 		Color(modulate.r, modulate.g, modulate.b, alpha))
+
+func _draw_arena_fret(
+		center: Vector2, radius: float, col: Color, alpha: float, hit: bool) -> void:
+	if radius < 1.5:
+		return
+	var quality := _effective_vfx_quality()
+	var energy := _arena_combo_energy_display
+	var accent := _arena_accent_color()
+	var body := col.darkened(0.58) if hit else col.darkened(0.18)
+
+	match Settings.arena_fret_skin:
+		"anvil":
+			var outer := PackedVector2Array([
+				center + Vector2(-radius * 0.98, -radius * 0.16),
+				center + Vector2(-radius * 0.66, -radius * 0.55),
+				center + Vector2(radius * 0.66, -radius * 0.55),
+				center + Vector2(radius * 0.98, -radius * 0.16),
+				center + Vector2(radius * 0.72, radius * 0.50),
+				center + Vector2(-radius * 0.72, radius * 0.50),
+			])
+			draw_polygon(outer, PackedColorArray([
+				Color(0.08, 0.075, 0.07, alpha),
+				Color(0.20, 0.18, 0.16, alpha),
+				Color(0.20, 0.18, 0.16, alpha),
+				Color(0.08, 0.075, 0.07, alpha),
+				Color(0.035, 0.032, 0.030, alpha),
+				Color(0.035, 0.032, 0.030, alpha),
+			]))
+			var inner := PackedVector2Array([
+				center + Vector2(-radius * 0.64, -radius * 0.14),
+				center + Vector2(-radius * 0.43, -radius * 0.32),
+				center + Vector2(radius * 0.43, -radius * 0.32),
+				center + Vector2(radius * 0.64, -radius * 0.14),
+				center + Vector2(radius * 0.47, radius * 0.27),
+				center + Vector2(-radius * 0.47, radius * 0.27),
+			])
+			draw_colored_polygon(inner, Color(body.r, body.g, body.b, alpha))
+			if quality != "performance":
+				draw_line(
+					center + Vector2(-radius * 0.42, -radius * 0.23),
+					center + Vector2(radius * 0.42, -radius * 0.23),
+					Color(1.0, 0.96, 0.84, 0.46 * alpha), maxf(1.0, radius * 0.055))
+		"coil":
+			draw_circle(center, radius * 0.62, Color(0.035, 0.032, 0.030, alpha))
+			draw_arc(
+				center, radius * 0.56, 0.0, TAU, 24,
+				Color(0.42, 0.39, 0.35, alpha), maxf(1.0, radius * 0.16), true)
+			draw_circle(center, radius * 0.40, Color(body.r, body.g, body.b, alpha))
+			draw_arc(
+				center, radius * 0.30, 0.0, TAU, 20,
+				Color(accent.r, accent.g, accent.b, (0.30 + energy * 0.55) * alpha),
+				maxf(1.0, radius * 0.075), true)
+			if quality == "full":
+				draw_circle(
+					center - Vector2(radius * 0.11, radius * 0.10),
+					maxf(1.0, radius * 0.07),
+					Color(1.0, 0.98, 0.90, 0.72 * alpha))
+		_:
+			# Blade: a low, chamfered steel pick with a colored glass core.
+			var blade := PackedVector2Array([
+				center + Vector2(-radius, 0.0),
+				center + Vector2(-radius * 0.69, -radius * 0.45),
+				center + Vector2(radius * 0.69, -radius * 0.45),
+				center + Vector2(radius, 0.0),
+				center + Vector2(radius * 0.61, radius * 0.42),
+				center + Vector2(-radius * 0.61, radius * 0.42),
+			])
+			draw_colored_polygon(blade, Color(0.09, 0.082, 0.075, alpha))
+			var glass := PackedVector2Array([
+				center + Vector2(-radius * 0.69, 0.0),
+				center + Vector2(-radius * 0.48, -radius * 0.25),
+				center + Vector2(radius * 0.48, -radius * 0.25),
+				center + Vector2(radius * 0.69, 0.0),
+				center + Vector2(radius * 0.43, radius * 0.22),
+				center + Vector2(-radius * 0.43, radius * 0.22),
+			])
+			draw_colored_polygon(glass, Color(body.r, body.g, body.b, alpha))
+			if quality != "performance":
+				draw_line(
+					center + Vector2(-radius * 0.42, -radius * 0.17),
+					center + Vector2(radius * 0.42, -radius * 0.17),
+					Color(1.0, 0.98, 0.90, 0.62 * alpha), maxf(1.0, radius * 0.055))
+
+func _arena_combo_energy(combo_value: int) -> float:
+	if combo_value <= 0:
+		return 0.0
+	return clampf(1.0 - exp(-float(combo_value) / 105.0), 0.0, 1.0)
+
+# UV distance the art travels before it repeats. Mirrored art folds back on
+# itself, so its cycle is two tiles rather than one.
+func _arena_highway_period() -> float:
+	return 2.0 if _arena_highway_mirror else 1.0
+
+# Advancing `_arena_highway_repeat` per approach time keeps the deck locked to
+# the notes, because that is exactly base_v at the hit line.
+func _arena_highway_scroll_phase(time_ms: float) -> float:
+	var approach_ms := maxf(_approach_time_ms(), 1.0)
+	return fposmod(
+		maxf(time_ms, 0.0) / approach_ms * _arena_highway_repeat,
+		_arena_highway_period())
+
+# Depth measured in tiles: 0 at the horizon, growing toward the player. Linear
+# in z, which is what makes the art sit flat on the deck.
+func _arena_highway_base_v(z: float) -> float:
+	var z_far := _gh_z_far()
+	return _arena_highway_repeat * (z_far - z) / maxf(z_far - 1.0, 0.001)
+
+func _arena_highway_z_at(depth_v: float) -> float:
+	var z_far := _gh_z_far()
+	return maxf(
+		z_far - depth_v * (z_far - 1.0) / maxf(_arena_highway_repeat, 0.001),
+		0.05)
+
+func _arena_highway_quad(
+		depth_top: float, depth_bottom: float, center_x: float,
+		left_bottom: float, right_bottom: float) -> PackedVector2Array:
+	var z_top := _arena_highway_z_at(depth_top)
+	var z_bottom := _arena_highway_z_at(depth_bottom)
+	var vy := _cached_gh_vanish_y
+	var height := _cached_hit_line_y - vy
+	var y_top := vy + height / z_top
+	var y_bottom := vy + height / z_bottom
+	return PackedVector2Array([
+		Vector2(center_x + (left_bottom - center_x) / z_top, y_top),
+		Vector2(center_x + (right_bottom - center_x) / z_top, y_top),
+		Vector2(center_x + (right_bottom - center_x) / z_bottom, y_bottom),
+		Vector2(center_x + (left_bottom - center_x) / z_bottom, y_bottom),
+	])
+
+# Rebuilds the scrolling deck slices for the current scroll phase.
+#
+# The wobble this replaces came from slicing the deck at fixed screen rows: the
+# affine UV error inside a slice then stayed put on screen, so every feature in
+# the art sped up and slowed down again as it crossed each boundary. Here the
+# boundaries are pinned to texture rows instead, so each slice edge follows the
+# exact perspective curve and every point between two edges is a fixed blend of
+# two exact trajectories — smooth by construction, at any slice count.
+func _update_arena_highway_deck(time_ms: float) -> int:
+	if _arena_deck_slice_count <= 0:
+		return 0
+	var phase := _arena_highway_scroll_phase(time_ms)
+	if absf(phase - _arena_highway_scroll_phase_cached) < 0.000001:
+		return _arena_deck_used_cached
+	var slice_span := 1.0 / float(ARENA_HIGHWAY_SLICES_PER_TILE)
+	var period_slices := ARENA_HIGHWAY_SLICES_PER_TILE \
+		* int(round(_arena_highway_period()))
+	var whole := floorf(phase / slice_span)
+	# Distance from the horizon to the first texture-aligned boundary.
+	var lead := phase - whole * slice_span
+	var center_x := _frame_viewport_size.x * 0.5
+	var left_bottom := _cached_lanes_start_x
+	var right_bottom := left_bottom + float(lane_count) * _cached_lane_width
+	var used := 0
+	# Leading slice, clipped by the horizon. Both its edges still land on the
+	# exact curve; only its interior blend shifts, and it is a few pixels tall.
+	if lead > 0.0001:
+		var lead_index := posmod(int(-whole), period_slices)
+		var lead_bottom_uv := float(lead_index) * slice_span
+		var lead_top_uv := lead_bottom_uv - lead
+		if lead_top_uv < 0.0:
+			lead_top_uv += _arena_highway_period()
+			lead_bottom_uv += _arena_highway_period()
+		_arena_deck_slices[used] = _arena_highway_quad(
+			0.0, lead, center_x, left_bottom, right_bottom)
+		_arena_deck_slice_uvs[used] = PackedVector2Array([
+			Vector2(0.0, lead_top_uv), Vector2(1.0, lead_top_uv),
+			Vector2(1.0, lead_bottom_uv), Vector2(0.0, lead_bottom_uv),
+		])
+		used += 1
+	var slice_j := 0
+	while used < _arena_deck_slice_count:
+		var depth_top := lead + float(slice_j) * slice_span
+		if depth_top >= _arena_highway_v_span:
+			break
+		var uv_index := posmod(slice_j - int(whole), period_slices)
+		var uv_top := float(uv_index) * slice_span
+		_arena_deck_slices[used] = _arena_highway_quad(
+			depth_top, depth_top + slice_span,
+			center_x, left_bottom, right_bottom)
+		_arena_deck_slice_uvs[used] = PackedVector2Array([
+			Vector2(0.0, uv_top), Vector2(1.0, uv_top),
+			Vector2(1.0, uv_top + slice_span),
+			Vector2(0.0, uv_top + slice_span),
+		])
+		used += 1
+		slice_j += 1
+	_arena_highway_scroll_phase_cached = phase
+	_arena_deck_used_cached = used
+	return used
+
+func _arena_effect_frame_position(time_ms: float) -> float:
+	var safe_time_sec := maxf(time_ms, 0.0) / 1000.0
+	return fposmod(
+		safe_time_sec * ARENA_EFFECT_FPS,
+		float(ARENA_EFFECT_FRAME_COUNT))
+
+func _arena_effect_frame(time_ms: float) -> int:
+	return int(floor(_arena_effect_frame_position(time_ms)))
+
+func _arena_effect_uvs_for_frame(frame_index: int) -> PackedVector2Array:
+	var wrapped_frame := posmod(frame_index, ARENA_EFFECT_FRAME_COUNT)
+	var column := wrapped_frame % ARENA_EFFECT_COLUMNS
+	var row := wrapped_frame / ARENA_EFFECT_COLUMNS
+	var texture_size := (
+		_arena_effect_texture.get_size()
+		if _arena_effect_texture
+		else Vector2(
+			ARENA_EFFECT_COLUMNS * 96,
+			ARENA_EFFECT_ROWS * 192))
+	var half_u := 0.5 / maxf(texture_size.x, 1.0)
+	var half_v := 0.5 / maxf(texture_size.y, 1.0)
+	var u0 := float(column) / float(ARENA_EFFECT_COLUMNS) + half_u
+	var v0 := float(row) / float(ARENA_EFFECT_ROWS) + half_v
+	var u1 := float(column + 1) / float(ARENA_EFFECT_COLUMNS) - half_u
+	var v1 := float(row + 1) / float(ARENA_EFFECT_ROWS) - half_v
+	return PackedVector2Array([
+		Vector2(u0, v0), Vector2(u1, v0),
+		Vector2(u1, v1), Vector2(u0, v1),
+	])
+
+func _fill_arena_effect_strip_uvs(
+		target: Array[PackedVector2Array], frame_index: int) -> void:
+	var frame_uvs := _arena_effect_uvs_for_frame(frame_index)
+	var top_left := frame_uvs[0]
+	var top_right := frame_uvs[1]
+	var bottom_right := frame_uvs[2]
+	var strip_count := mini(_arena_highway_strips.size(), target.size())
+	var depth_span := maxf(_arena_highway_v_span, 0.001)
+	for strip_index in range(strip_count):
+		# Stretch the frame evenly along the deck in world depth, not in screen
+		# rows, so the effect sits on the surface instead of on the glass.
+		var top_t := float(_arena_highway_strip_depth[strip_index]) / depth_span
+		var bottom_t := float(
+			_arena_highway_strip_depth[strip_index + 1]) / depth_span
+		var top_v := lerpf(top_left.y, bottom_right.y, top_t)
+		var bottom_v := lerpf(top_left.y, bottom_right.y, bottom_t)
+		target[strip_index] = PackedVector2Array([
+			Vector2(top_left.x, top_v), Vector2(top_right.x, top_v),
+			Vector2(top_right.x, bottom_v), Vector2(top_left.x, bottom_v),
+		])
+
+func _update_arena_effect_strip_uvs(frame_a: int, frame_b: int) -> void:
+	if frame_a != _arena_effect_frame_a_cached:
+		_fill_arena_effect_strip_uvs(_arena_effect_strip_uvs_a, frame_a)
+		_arena_effect_frame_a_cached = frame_a
+	if frame_b != _arena_effect_frame_b_cached:
+		_fill_arena_effect_strip_uvs(_arena_effect_strip_uvs_b, frame_b)
+		_arena_effect_frame_b_cached = frame_b
+
+func _arena_effect_alpha() -> float:
+	if not _arena_mode:
+		return 0.0
+	var reveal := smoothstep(0.02, 0.58, _arena_combo_energy_display)
+	if reveal <= 0.0:
+		return 0.0
+	var beat_response := 0.95 + clampf(_beat_pulse, 0.0, 1.0) * 0.05
+	var overdrive_lift := 0.025 if _overdrive_active else 0.0
+	# Alpha-blended, so every point of this greys out the deck art underneath.
+	# Kept low enough to tint and animate the surface rather than veil it.
+	return clampf(0.14 * reveal * beat_response + overdrive_lift, 0.0, 0.16)
+
+func _arena_accent_color() -> Color:
+	if _combo_glow_color.a > 0.0:
+		return Color(
+			_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, 1.0)
+	return Color(0.72, 0.78, 0.84)
+
+func _arena_rib_count() -> int:
+	match _effective_vfx_quality():
+		"full":
+			return 12
+		"balanced":
+			return 8
+		_:
+			return 4
 
 # --- Shared drawing: starfield, vignette, particles ---
 
@@ -3387,7 +4793,9 @@ func _draw_hyperspeed_flat(vp: Vector2) -> void:
 	# streaks run from the top of the portrait screen toward the hit line.
 	draw_texture_rect_region(texture, Rect2(Vector2.ZERO, vp), region, Color(1, 1, 1, 0.22), true)
 
-func _draw_hyperspeed_gh(points: PackedVector2Array) -> void:
+func _draw_hyperspeed_gh(
+		points: PackedVector2Array, opacity_scale: float = 1.0,
+		use_song_time: bool = false) -> void:
 	if points.size() != 4:
 		return
 	# A texture mapped over one large trapezoid develops a diagonal UV seam on
@@ -3397,8 +4805,13 @@ func _draw_hyperspeed_gh(points: PackedVector2Array) -> void:
 	var tr := points[1]
 	var br := points[2]
 	var bl := points[3]
-	var now := _frame_time_sec
-	var streak_count := 24 if _effective_vfx_quality() == "full" else 17
+	var now := (
+		maxf(song_time_ms, 0.0) * 0.001
+		if use_song_time else _frame_time_sec)
+	var streak_count := (
+		18 if _effective_vfx_quality() == "full" else 12
+	) if use_song_time else (
+		24 if _effective_vfx_quality() == "full" else 17)
 	var tier_color := _combo_glow_color.lightened(0.22)
 	for streak_i in range(streak_count):
 		var seed := fposmod(sin(float(streak_i) * 12.9898) * 43758.5453, 1.0)
@@ -3419,13 +4832,19 @@ func _draw_hyperspeed_gh(points: PackedVector2Array) -> void:
 		var width := 1.0 + head_t * 3.2
 		var streak_color := tier_color if streak_i % 4 else UITheme.NEON_CYAN
 		draw_line(tail, head,
-			Color(streak_color.r, streak_color.g, streak_color.b, alpha * 0.34), width * 3.0, true)
+			Color(
+				streak_color.r, streak_color.g, streak_color.b,
+				alpha * 0.34 * opacity_scale),
+			width * 3.0, true)
 		draw_line(tail, head,
-			Color(streak_color.r, streak_color.g, streak_color.b, alpha), width, true)
+			Color(
+				streak_color.r, streak_color.g, streak_color.b,
+				alpha * opacity_scale),
+			width, true)
 
-func _combo_streak_tint() -> Color:
+func _combo_streak_tint(opacity_scale: float = 1.0) -> Color:
 	var tier_color := _combo_glow_color if _combo_glow_color.a > 0.0 else UITheme.NEON_CYAN
-	var alpha := 0.24 if combo >= 300 else 0.17
+	var alpha := (0.24 if combo >= 300 else 0.17) * opacity_scale
 	return Color(tier_color.r, tier_color.g, tier_color.b, alpha)
 
 func _draw_combo_streaks_flat(vp: Vector2) -> void:
@@ -3442,13 +4861,18 @@ func _draw_combo_streaks_flat(vp: Vector2) -> void:
 	draw_texture_rect_region(texture,
 		Rect2(ls + total_w - strip_w, 0.0, strip_w, _hit_line_y()), region, tint, true)
 
-func _draw_combo_streaks_gh(points: PackedVector2Array) -> void:
+func _draw_combo_streaks_gh(
+		points: PackedVector2Array, opacity_scale: float = 1.0,
+		use_song_time: bool = false) -> void:
 	var texture := VFX.tex("combo_streaks")
 	if texture == null or points.size() != 4:
 		return
-	var frame := VFX.loop_frame_at("combo_streaks", _frame_time_sec, 0.72)
+	var animation_time := (
+		maxf(song_time_ms, 0.0) * 0.001
+		if use_song_time else _frame_time_sec)
+	var frame := VFX.loop_frame_at("combo_streaks", animation_time, 0.72)
 	var uvs := VFX.frame_uvs("combo_streaks", frame)
-	var tint := _combo_streak_tint()
+	var tint := _combo_streak_tint(opacity_scale)
 	var colors := PackedColorArray([tint, tint, tint, tint])
 	draw_polygon(_gh_combo_left_points, colors, uvs, texture)
 	draw_polygon(_gh_combo_right_points, colors, uvs, texture)
@@ -3522,7 +4946,7 @@ func _draw_flat_highway(vp: Vector2) -> void:
 			base_alpha = 0.45
 		draw_rect(Rect2(hx, hy, hw, hz_h), lane_colors[idx] * Color(1, 1, 1, base_alpha))
 		# Combo glow border on hit zone
-		if _combo_glow_color.a > 0:
+		if _combo_glow_color.a > 0 and not _arena_mode:
 			var gz_pulse := 0.1 * sin(_frame_time_msec * 0.005)
 			var gz_a := (_combo_glow_color.a * 0.5 + gz_pulse)
 			draw_rect(Rect2(hx, hy, hw, hz_h), Color(_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, gz_a), false, 3.0)
@@ -3568,8 +4992,9 @@ func _draw_flat_highway(vp: Vector2) -> void:
 	# Notes
 	var note_h := _note_height()
 	var margin := lw * FLAT_NOTE_MARGIN_RATIO
+	var sustain_lightning_previews := 0
 
-	for idx in range(first_visible_idx, notes.size()):
+	for idx in range(_first_drawn_idx, notes.size()):
 		var n = notes[idx]
 		var t: float = n["time_ms"]
 		var time_until := t - song_time_ms
@@ -3632,6 +5057,13 @@ func _draw_flat_highway(vp: Vector2) -> void:
 					var hold_style := sustain_styles_hold[lane]
 					hold_style.bg_color = hc * Color(1, 1, 1, 0.65 + pulse)
 					draw_style_box(hold_style, Rect2(sx, hold_top, sw, hold_bottom - hold_top + note_h))
+					_draw_sustain_lightning_column(
+						Vector2(x + w * 0.5, hold_top),
+						Vector2(x + w * 0.5, hold_bottom),
+						hc.lightened(0.24),
+						_sustain_lightning_intensity(
+							dur_ms, time_until, app_ms, true),
+						idx, lane, true)
 				# Hold aura — pulsing lane-colored glow behind the head
 				var hold_pulse := 0.5 + 0.5 * sin(_frame_time_msec * 0.012)
 				draw_circle(Vector2(x + w / 2.0, hit_y), w * (0.55 + 0.08 * hold_pulse),
@@ -3687,6 +5119,16 @@ func _draw_flat_highway(vp: Vector2) -> void:
 				# Active sustain
 				if y - tail_y + note_h > 0:
 					draw_style_box(sustain_styles[lane], Rect2(sx, tail_y, sw, y - tail_y + note_h))
+					var preview_intensity := _sustain_lightning_intensity(
+						dur_ms, time_until, app_ms, false)
+					if preview_intensity > 0.01 \
+							and sustain_lightning_previews < _sustain_lightning_preview_cap():
+						_draw_sustain_lightning_column(
+							Vector2(x + w * 0.5, maxf(0.0, tail_y + note_h * 0.5)),
+							Vector2(x + w * 0.5, y + note_h * 0.5),
+							lane_colors[lane].lightened(0.24),
+							preview_intensity, idx, lane, false)
+						sustain_lightning_previews += 1
 
 		# --- Note head (beveled tile texture) ---
 		var head_tex: Texture2D = note_tex[lane] if lane < note_tex.size() else null
@@ -3723,9 +5165,657 @@ func _draw_flat_highway(vp: Vector2) -> void:
 	# Spawn fade — notes emerge from darkness at the top
 	draw_polygon(_spawn_fade_points, _spawn_fade_colors)
 
+func _draw_pixel_stage(vp: Vector2) -> void:
+	var horizon_y := _gh_y(_gh_z_far())
+	var floor_y := horizon_y + vp.y * 0.055
+	var primary := _theme_color("stage_primary", UITheme.NEON_PURPLE)
+	var secondary := _theme_color("stage_secondary", UITheme.NEON_CYAN)
+	if _arena_mode:
+		primary = _arena_accent_color()
+		secondary = UITheme.ROCK_IVORY.lerp(primary, 0.46)
+	var performance_mode := _effective_vfx_quality() == "performance"
+	var live_motion := Settings.pixel_stage_intensity == "live" and not performance_mode
+	var motion_scale := 1.0 if live_motion else 0.34
+	var combo_energy := clampf(float(combo) / 180.0, 0.0, 1.0)
+	var meter_energy := 1.0
+	if _rock_meter_mode != "off":
+		meter_energy = lerpf(0.48, 1.0, clampf(_rock_meter_display, 0.0, 1.0))
+	var stage_energy := clampf(
+		(0.38 + _beat_pulse * 0.28 + combo_energy * 0.34) * meter_energy,
+		0.24, 1.0)
+	if _overdrive_active:
+		stage_energy = 1.0
+		primary = primary.lightened(0.28)
+		secondary = Color(0.72, 0.94, 1.0)
+
+	# Pixel-block back wall and riser. The highway covers the performers' feet,
+	# making them feel physically placed behind the note track.
+	draw_rect(
+		Rect2(vp.x * 0.055, horizon_y - vp.y * 0.135, vp.x * 0.89, vp.y * 0.19),
+		Color(0.018, 0.016, 0.035, 0.82))
+	draw_rect(
+		Rect2(vp.x * 0.075, floor_y - vp.y * 0.012, vp.x * 0.85, vp.y * 0.024),
+		Color(primary.r, primary.g, primary.b, 0.10 + stage_energy * 0.10))
+	draw_rect(
+		Rect2(vp.x * 0.075, floor_y + vp.y * 0.012, vp.x * 0.85, vp.y * 0.010),
+		Color(0.01, 0.008, 0.02, 0.95))
+
+	if not performance_mode:
+		var beam_alpha := (0.025 + stage_energy * 0.055) \
+			* (1.0 if live_motion else 0.55)
+		var sweep := sin(_frame_time_sec * 0.72) * vp.x * 0.08 * motion_scale
+		draw_polygon(PackedVector2Array([
+			Vector2(vp.x * 0.13, 0.0),
+			Vector2(vp.x * 0.20, 0.0),
+			Vector2(vp.x * 0.38 + sweep, floor_y),
+			Vector2(vp.x * 0.24 + sweep, floor_y),
+		]), PackedColorArray([Color(primary.r, primary.g, primary.b, beam_alpha)]))
+		draw_polygon(PackedVector2Array([
+			Vector2(vp.x * 0.80, 0.0),
+			Vector2(vp.x * 0.87, 0.0),
+			Vector2(vp.x * 0.76 - sweep, floor_y),
+			Vector2(vp.x * 0.62 - sweep, floor_y),
+		]), PackedColorArray([Color(secondary.r, secondary.g, secondary.b, beam_alpha)]))
+
+	# Speaker stacks stay deliberately chunky so the scene reads as pixel art
+	# even when the generated silhouettes are scaled on high-DPI phones.
+	_draw_pixel_speaker(Vector2(vp.x * 0.075, floor_y), vp.y * 0.055, primary, stage_energy)
+	_draw_pixel_speaker(Vector2(vp.x * 0.925, floor_y), vp.y * 0.055, secondary, stage_energy)
+
+	var sway_time := _frame_time_sec * 3.1
+	var beat_lift := _beat_pulse * vp.y * 0.004 * motion_scale
+	var performer_alpha := 0.70 + stage_energy * 0.25
+	var performer_positions := _pixel_stage_x_positions(_stage_visible_roles.size())
+	for performer_index in range(_stage_visible_roles.size()):
+		var role := _stage_visible_roles[performer_index]
+		var height_ratio := 0.155
+		var lift_ratio := 0.85
+		var sway_speed := 1.0
+		var sway_amount := 0.040
+		var flip := false
+		var accent := primary if performer_index % 2 == 0 else secondary
+		var alpha := performer_alpha
+		match role:
+			"vocalist":
+				height_ratio = 0.148
+				lift_ratio = 0.72
+				sway_speed = 1.08
+				sway_amount = -0.036
+			"drummer":
+				height_ratio = 0.138
+				lift_ratio = 0.55
+				sway_speed = 1.35
+				sway_amount = 0.018
+				alpha *= 0.92
+			"bassist":
+				sway_speed = 0.92
+				sway_amount = -0.040
+				flip = true
+		if not _stage_role_is_active(role):
+			sway_amount *= 0.32
+		_draw_pixel_stage_performer(
+			role,
+			Vector2(
+				vp.x * performer_positions[performer_index],
+				floor_y - beat_lift * lift_ratio),
+			vp.y * height_ratio,
+			alpha,
+			sin(sway_time * sway_speed) * sway_amount * motion_scale,
+			flip,
+			accent,
+			_stage_animation_frame(role, live_motion, performance_mode))
+
+	# Small square footlights flash on strong beats without adding particles.
+	var light_count := 7
+	for light_index in range(light_count):
+		var light_color := primary if light_index % 2 == 0 else secondary
+		var light_alpha := 0.10 + stage_energy * (0.25 if not performance_mode else 0.08)
+		var light_x := lerpf(vp.x * 0.17, vp.x * 0.83,
+			float(light_index) / float(light_count - 1))
+		var light_size := maxf(3.0, vp.y * 0.005)
+		draw_rect(
+			Rect2(
+				Vector2(light_x - light_size * 0.5, floor_y - light_size * 0.5),
+				Vector2(light_size, light_size)),
+			Color(light_color.r, light_color.g, light_color.b, light_alpha))
+
+func _pixel_stage_x_positions(performer_count: int) -> Array[float]:
+	match performer_count:
+		1:
+			return [0.50]
+		2:
+			return [0.30, 0.70]
+		3:
+			return [0.19, 0.50, 0.81]
+		_:
+			return [0.15, 0.37, 0.62, 0.85]
+
+func _stage_role_is_active(role: String) -> bool:
+	if role == "vocalist":
+		return _stage_vocal_is_singing()
+	var elapsed := song_time_ms - float(_stage_last_event_ms.get(role, -10000.0))
+	var activity_window := 260.0 if role == "drummer" else 420.0
+	return elapsed >= -20.0 and elapsed <= activity_window
+
+func _stage_vocal_is_singing() -> bool:
+	if lyric_phrases.is_empty() or current_phrase_idx >= lyric_phrases.size():
+		return false
+	var phrase: Dictionary = lyric_phrases[current_phrase_idx]
+	return song_time_ms >= float(phrase.get("start_ms", 0.0)) \
+		and song_time_ms <= float(phrase.get("end_ms", 0.0))
+
+func _stage_animation_frame(role: String, live_motion: bool,
+		performance_mode: bool) -> int:
+	var idle_frames: Array = (
+		ARENA_STAGE_IDLE_FRAMES if _arena_mode else PIXEL_STAGE_IDLE_FRAMES)
+	var phase_offset := absi(role.hash()) % idle_frames.size()
+	if _stage_role_is_active(role):
+		var action_frames: Array = ARENA_STAGE_ACTION_FRAMES if _arena_mode \
+			else PIXEL_STAGE_ACTION_FRAMES_BY_ROLE.get(
+				role, PIXEL_STAGE_ACTION_FRAMES)
+		var action_step := 0
+		if role == "vocalist":
+			action_step = _stage_vocal_action_step(
+				150.0 if not live_motion else 82.0, action_frames.size())
+		else:
+			var action_fps := 6.0 if performance_mode else (13.0 if live_motion else 8.0)
+			action_step = int(floor(
+				song_time_ms * action_fps / 1000.0 + phase_offset)) \
+				% action_frames.size()
+		return int(action_frames[action_step])
+
+	var idle_fps := 1.0 if performance_mode else (3.2 if live_motion else 1.7)
+	var idle_step := int(floor(_frame_time_sec * idle_fps + phase_offset)) \
+		% idle_frames.size()
+	return int(idle_frames[idle_step])
+
+func _stage_vocal_action_step(frame_ms: float, action_frame_count: int) -> int:
+	if not _stage_vocal_is_singing():
+		return 0
+	var phrase: Dictionary = lyric_phrases[current_phrase_idx]
+	var syllable_anchor := float(phrase.get("start_ms", song_time_ms))
+	var syllable_ordinal := 0
+	for syllable_variant in phrase.get("syllables", []):
+		var syllable: Dictionary = syllable_variant
+		var syllable_time := float(syllable.get("time_ms", syllable_anchor))
+		if syllable_time > song_time_ms:
+			break
+		syllable_anchor = syllable_time
+		syllable_ordinal += 1
+	var local_step := int(floor(
+		maxf(0.0, song_time_ms - syllable_anchor) / maxf(frame_ms, 1.0)))
+	return (syllable_ordinal * 2 + local_step) % maxi(action_frame_count, 1)
+
+func _draw_pixel_speaker(base: Vector2, height: float, accent: Color, energy: float) -> void:
+	var width := height * 0.62
+	var top_left := base - Vector2(width * 0.5, height)
+	draw_rect(Rect2(top_left, Vector2(width, height)), Color(0.015, 0.014, 0.025, 0.96))
+	var inset := width * 0.12
+	draw_rect(
+		Rect2(top_left + Vector2(inset, inset), Vector2(width - inset * 2.0, height * 0.28)),
+		Color(accent.r, accent.g, accent.b, 0.08 + energy * 0.08))
+	draw_rect(
+		Rect2(top_left + Vector2(inset, height * 0.50), Vector2(width - inset * 2.0, height * 0.38)),
+		Color(accent.r, accent.g, accent.b, 0.06 + energy * 0.06))
+
+func _draw_pixel_stage_performer(role: String, feet: Vector2, height: float,
+		alpha: float, rotation: float, flip: bool, accent: Color,
+		frame_index: int) -> void:
+	var textures: Array = _pixel_stage_textures.get(role, [])
+	var texture: Texture2D = null
+	var frame_rect := Rect2()
+	if not textures.is_empty():
+		var idx := frame_index % textures.size()
+		texture = textures[idx] as Texture2D
+		var rects: Array = _pixel_stage_frame_rects.get(role, [])
+		if idx < rects.size():
+			frame_rect = rects[idx]
+	draw_set_transform(feet, rotation, Vector2(-1.0 if flip else 1.0, 1.0))
+	if texture:
+		# Anchor by the frame's opaque content (bottom-centre = the performer's
+		# feet) and scale by its content height, not the raw 256² canvas. The
+		# generated frames aren't pixel-registered, so canvas-anchoring made the
+		# figure jump between poses; trimming to the used rect keeps it planted.
+		if frame_rect.size.x < 1.0 or frame_rect.size.y < 1.0:
+			frame_rect = Rect2(Vector2.ZERO, texture.get_size())
+		var draw_scale := height / maxf(frame_rect.size.y, 1.0)
+		var draw_size := frame_rect.size * draw_scale
+		var destination := Rect2(
+			Vector2(-draw_size.x * 0.5, -draw_size.y), draw_size)
+		if _arena_mode and _arena_combo_energy_display > 0.04 \
+				and _effective_vfx_quality() != "performance":
+			var aura_size := draw_size * (1.025 + _arena_combo_energy_display * 0.025)
+			var aura_rect := Rect2(
+				Vector2(-aura_size.x * 0.5, -aura_size.y), aura_size)
+			draw_texture_rect_region(
+				texture, aura_rect, frame_rect,
+				Color(
+					accent.r, accent.g, accent.b,
+					alpha * (0.06 + _arena_combo_energy_display * 0.10)),
+				false)
+		var texture_modulate := Color(1.0, 1.0, 1.0, alpha)
+		if _arena_mode:
+			var tint_strength := 0.04 + _arena_combo_energy_display * 0.08
+			texture_modulate = Color(
+				lerpf(1.0, accent.r, tint_strength),
+				lerpf(1.0, accent.g, tint_strength),
+				lerpf(1.0, accent.b, tint_strength),
+				alpha)
+		draw_texture_rect_region(
+			texture, destination, frame_rect, texture_modulate, false)
+	else:
+		_draw_pixel_performer_fallback(role, height, alpha, accent)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_pixel_performer_fallback(role: String, height: float,
+		alpha: float, accent: Color) -> void:
+	var px := maxf(2.0, height / 32.0)
+	var silhouette := Color(0.012, 0.010, 0.022, alpha)
+	var rim := Color(accent.r, accent.g, accent.b, alpha * 0.52)
+	draw_rect(Rect2(-px * 2.0, -height, px * 4.0, px * 4.0), rim)
+	draw_rect(Rect2(-px * 1.5, -height + px, px * 3.0, px * 3.0), silhouette)
+	draw_rect(Rect2(-px * 3.0, -height + px * 5.0, px * 6.0, px * 12.0), silhouette)
+	draw_rect(Rect2(-px * 2.5, -height + px * 17.0, px * 2.0, px * 12.0), silhouette)
+	draw_rect(Rect2(px * 0.5, -height + px * 17.0, px * 2.0, px * 12.0), silhouette)
+	if role == "drummer":
+		draw_rect(Rect2(-px * 7.0, -height + px * 12.0, px * 14.0, px * 5.0), rim)
+		draw_rect(Rect2(-px * 5.0, -height + px * 13.0, px * 10.0, px * 6.0), silhouette)
+	elif role == "vocalist":
+		draw_rect(Rect2(px * 2.5, -height + px * 7.0, px * 1.2, px * 18.0), rim)
+		draw_rect(Rect2(px * 1.5, -height + px * 5.0, px * 4.0, px * 2.0), silhouette)
+	else:
+		draw_rect(Rect2(-px * 8.0, -height + px * 10.0, px * 16.0, px * 3.0), rim)
+		draw_rect(Rect2(-px * 5.0, -height + px * 9.0, px * 8.0, px * 7.0), silhouette)
+
 # =====================================================================
 #  GH HIGHWAY (pseudo-3D perspective view)
 # =====================================================================
+
+# Deck depths for a repeating feature locked to the scroll, so it travels at
+# exactly note speed. Spacing divides the repeat period, which keeps the pattern
+# continuous across the wrap instead of jumping once per cycle.
+func _deck_feature_depths(target_count: int) -> PackedFloat32Array:
+	var depths := PackedFloat32Array()
+	if target_count <= 0 or _arena_highway_v_span <= 0.0:
+		return depths
+	var period := _arena_highway_period()
+	var ticks := maxi(1, int(round(
+		float(target_count) * period / maxf(_arena_highway_v_span, 0.001))))
+	var spacing := period / float(ticks)
+	var depth := fposmod(_arena_highway_scroll_phase(song_time_ms), spacing)
+	while depth <= _arena_highway_v_span:
+		depths.append(depth)
+		depth += spacing
+	return depths
+
+# How many chevrons the current streak has earned. The highway is the score
+# meter: nothing until the first multiplier, then denser every tier.
+func _arena_chevron_count() -> int:
+	if _overdrive_active:
+		return 14
+	if combo >= 500:
+		return 12
+	if combo >= 300:
+		return 10
+	if combo >= 200:
+		return 8
+	if combo >= 100:
+		return 6
+	if combo >= 50:
+		return 5
+	if combo >= 25:
+		return 4
+	return 0
+
+# Flowing chevrons — the procedural replacement for the RB4 video overlay. Each
+# is two lines whose apex sits nearer the player than its wingtips, so the V
+# points down the highway and reads correctly in perspective.
+func _draw_deck_chevrons(
+		ls: float, total_w: float, energy: float, accent: Color) -> void:
+	var count := _arena_chevron_count()
+	if count <= 0:
+		return
+	var depths := _deck_feature_depths(count)
+	if depths.is_empty():
+		return
+	var center_bottom := ls + total_w * 0.5
+	var wing_depth := _arena_highway_v_span / float(maxi(count, 1)) * 0.45
+	var beat := 0.82 + clampf(_beat_pulse, 0.0, 1.0) * 0.18
+	var tint := (
+		Color(0.80, 0.94, 1.0) if _overdrive_active else accent.lightened(0.42))
+	var base_alpha := (0.34 if _overdrive_active else 0.12 + energy * 0.24)
+	# The pattern snuffs out the instant the streak dies, ahead of the smoothed
+	# energy falloff, so the loss lands on the frame it happens.
+	base_alpha *= 1.0 - _arena_collapse * 0.75
+	# ...and flares briefly as a new tier lands.
+	base_alpha *= 1.0 + _arena_tier_wave * 0.60
+	for depth_index in range(depths.size()):
+		var depth := float(depths[depth_index])
+		var apex_z := _arena_highway_z_at(depth)
+		var wing_z := _arena_highway_z_at(maxf(depth - wing_depth, 0.0))
+		var apex := Vector2(_gh_x(center_bottom, apex_z), _gh_y(apex_z))
+		var left := Vector2(_gh_x(ls, wing_z), _gh_y(wing_z))
+		var right := Vector2(_gh_x(ls + total_w, wing_z), _gh_y(wing_z))
+		# Faint at the horizon, strongest as it arrives — sells the approach.
+		var travel := depth / maxf(_arena_highway_v_span, 0.001)
+		var alpha := base_alpha * beat * (0.18 + travel * 0.82)
+		if alpha <= 0.004:
+			continue
+		var width := (1.0 + travel * 2.4) * (1.35 if _overdrive_active else 1.0)
+		var col := Color(tint.r, tint.g, tint.b, alpha)
+		draw_line(left, apex, col, width, true)
+		draw_line(apex, right, col, width, true)
+
+# Tier-up surge. The mirror of the discharge below: same band, but it starts at
+# the horizon and accelerates toward the player in the new tier's colour, so
+# gaining a multiplier reads as power arriving rather than draining away.
+func _draw_deck_tier_wave(ls: float, total_w: float) -> void:
+	if _arena_tier_wave <= 0.002:
+		return
+	var tint := _arena_tier_wave_color
+	var fade := _arena_tier_wave * _arena_tier_wave
+	draw_colored_polygon(
+		_gh_surface_points,
+		Color(tint.r, tint.g, tint.b, 0.07 * fade))
+	var travel := 1.0 - _arena_tier_wave
+	var span := maxf(_arena_highway_v_span, 0.001)
+	# Accelerating, like the notes themselves.
+	var band_depth := lerpf(0.0, span, travel * travel)
+	var band_width := span * 0.14
+	var head := tint.lightened(0.45)
+	var trail := maxf(band_depth - band_width, 0.0)
+	for edge_index in range(2):
+		var depth := band_depth if edge_index == 0 else trail
+		var z := _arena_highway_z_at(depth)
+		var y := _gh_y(z)
+		var left := Vector2(_gh_x(ls, z), y)
+		var right := Vector2(_gh_x(ls + total_w, z), y)
+		var edge_scale := 1.0 if edge_index == 0 else 0.40
+		var alpha := 0.80 * _arena_tier_wave * edge_scale
+		# Layered like the sustain rod, or a 3px line vanishes into the pattern.
+		var core := head.lightened(0.35) if edge_index == 0 else head
+		draw_line(left, right,
+			Color(head.r, head.g, head.b, alpha * 0.22), 15.0 * edge_scale)
+		draw_line(left, right,
+			Color(head.r, head.g, head.b, alpha * 0.55), 6.0 * edge_scale)
+		draw_line(left, right,
+			Color(core.r, core.g, core.b, alpha), 2.4 * edge_scale)
+
+# Combo-break discharge. A band races back up the highway, against the normal
+# flow, so the light reads as being pulled away from the player rather than
+# delivered to them — that reversal is what sells it as a loss.
+func _draw_deck_collapse(ls: float, total_w: float) -> void:
+	if _arena_collapse <= 0.002:
+		return
+	var strength := _arena_collapse_strength
+	var fade := _arena_collapse * _arena_collapse
+	# Drains the deck of colour for an instant.
+	draw_colored_polygon(
+		_gh_surface_points,
+		Color(0.55, 0.06, 0.04, 0.10 * fade * strength))
+	# The band starts at the hit line and retreats toward the horizon.
+	var travel := 1.0 - _arena_collapse
+	var span := maxf(_arena_highway_v_span, 0.001)
+	var band_depth := lerpf(span, 0.0, travel * travel)
+	var band_width := span * 0.16
+	var edges := [band_depth, maxf(band_depth - band_width, 0.0)]
+	var line_alpha := (0.55 + 0.35 * strength) * _arena_collapse
+	for edge_index in range(edges.size()):
+		var depth: float = edges[edge_index]
+		var z := _arena_highway_z_at(depth)
+		var y := _gh_y(z)
+		var alpha := line_alpha * (1.0 if edge_index == 0 else 0.45)
+		draw_line(
+			Vector2(_gh_x(ls, z), y), Vector2(_gh_x(ls + total_w, z), y),
+			Color(1.0, 0.34, 0.22, alpha),
+			(3.0 if edge_index == 0 else 1.5) + strength * 2.0)
+
+# Venue lighting: beams thrown from the rig behind the stage, sweeping across
+# the deck. They pivot near the horizon and widen toward the player, which is
+# what sells the highway as a lit stage floor rather than a flat texture.
+func _draw_deck_light_beams(
+		ls: float, total_w: float, energy: float, accent: Color,
+		horizon_y: float, viewport_bottom: float) -> void:
+	var reveal := (1.0 if _overdrive_active else smoothstep(0.05, 0.55, energy))
+	if reveal <= 0.01:
+		return
+	var beam_count := 2
+	match _effective_vfx_quality():
+		"full":
+			beam_count = 4
+		"balanced":
+			beam_count = 3
+	var center_bottom := ls + total_w * 0.5
+	# Pivot exactly on the horizon: beams must land on the deck, never spill up
+	# into the sky above it.
+	var pivot_y := horizon_y
+	var sweep_time := _frame_time_sec * 0.23
+	var beat := 0.72 + clampf(_beat_pulse, 0.0, 1.0) * 0.28
+	var tint := (
+		Color(0.66, 0.86, 1.0) if _overdrive_active else accent.lightened(0.30))
+	for beam_index in range(beam_count):
+		var phase := sweep_time + TAU * float(beam_index) / float(beam_count)
+		# Each beam drifts across the deck on its own slow cycle.
+		var aim := sin(phase) * 0.72 + sin(phase * 0.37 + 1.1) * 0.22
+		var foot := center_bottom + aim * total_w * 0.78
+		var half := total_w * (0.15 + 0.05 * sin(phase * 0.61))
+		var alpha := (0.030 + energy * 0.035) * beat * reveal
+		if _overdrive_active:
+			alpha = maxf(alpha, 0.052 * beat)
+		if alpha <= 0.003:
+			continue
+		var apex_x := center_bottom + aim * total_w * 0.10
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(apex_x - total_w * 0.012, pivot_y),
+				Vector2(apex_x + total_w * 0.012, pivot_y),
+				Vector2(foot + half, viewport_bottom),
+				Vector2(foot - half, viewport_bottom)]),
+			PackedColorArray([
+				Color(tint.r, tint.g, tint.b, alpha * 1.15),
+				Color(tint.r, tint.g, tint.b, alpha * 1.15),
+				Color(tint.r, tint.g, tint.b, 0.0),
+				Color(tint.r, tint.g, tint.b, 0.0)]))
+
+func _draw_arena_highway_surface(
+		vp: Vector2, ls: float, total_w: float, z_far: float, z_bot: float,
+		horizon_y: float) -> void:
+	draw_polygon(_gh_surface_points, _arena_surface_colors)
+	var strip_count := _arena_highway_strips.size()
+	if _arena_highway_texture:
+		var deck_slices := _update_arena_highway_deck(song_time_ms)
+		var deck_tint := 0.90 * _arena_highway_gain
+		var deck_color := Color(deck_tint, deck_tint, deck_tint, 0.93)
+		for slice_index in range(deck_slices):
+			draw_colored_polygon(
+				_arena_deck_slices[slice_index],
+				deck_color,
+				_arena_deck_slice_uvs[slice_index],
+				_arena_highway_texture)
+
+	var energy := _arena_combo_energy_display
+	var accent := _arena_accent_color()
+
+	# Overdrive floods the deck before anything else is layered on, so the whole
+	# surface shifts colour rather than getting a rim of blue.
+	if _overdrive_active:
+		var flood := 0.10 + clampf(_beat_pulse, 0.0, 1.0) * 0.05
+		draw_colored_polygon(
+			_gh_surface_points, Color(0.36, 0.72, 1.0, flood))
+
+	if combo >= 200 and combo < 500 and _vfx_heavy_enabled():
+		_draw_combo_streaks_gh(_gh_surface_points, 0.42, true)
+	elif combo >= 500 and _vfx_heavy_enabled():
+		_draw_hyperspeed_gh(_gh_surface_points, 0.48, true)
+
+	for lane_index in range(_arena_lane_panels.size()):
+		var recess := Color(
+			0.012, 0.011, 0.010,
+			0.28 if lane_index % 2 == 0 else 0.18)
+		draw_colored_polygon(_arena_lane_panels[lane_index], recess)
+
+	# Lane charge. The streak lights the whole set, and the lane you are actually
+	# playing burns brighter on top of that, so the highway reports both your
+	# multiplier and your hands.
+	var charge_beat := 0.78 + clampf(_beat_pulse, 0.0, 1.0) * 0.22
+	var charge_tint := (
+		Color(0.72, 0.90, 1.0) if _overdrive_active else accent)
+	for lane_index in range(_arena_lane_cores.size()):
+		var lane_heat := 0.0
+		if lane_index < _lane_streak.size():
+			lane_heat = clampf(float(_lane_streak[lane_index]), 0.0, 1.0)
+		var charge := energy * charge_beat + lane_heat * 0.55
+		if _overdrive_active:
+			charge = maxf(charge, 0.62 * charge_beat)
+		charge *= 1.0 - _arena_collapse * 0.80
+		if charge <= 0.01:
+			continue
+		draw_colored_polygon(
+			_arena_lane_cores[lane_index],
+			Color(
+				charge_tint.r, charge_tint.g, charge_tint.b,
+				clampf(charge * 0.16, 0.0, 0.20)))
+
+	# Ribs are surface detail, so they have to travel at exactly deck speed.
+	# They used to run on their own 0.52x clock, which put them at ~57% of note
+	# speed — they visibly slid backwards through the art and the beat lines.
+	# Spacing divides the repeat period so they stay continuous across its wrap.
+	for rib_depth in _deck_feature_depths(_arena_rib_count()):
+		var z := _arena_highway_z_at(float(rib_depth))
+		var y := _gh_y(z)
+		var travel := float(rib_depth) / maxf(_arena_highway_v_span, 0.001)
+		var left := Vector2(_gh_x(ls, z), y)
+		var right := Vector2(_gh_x(ls + total_w, z), y)
+		var rib_alpha := (0.035 + energy * 0.105) * (0.35 + travel * 0.65)
+		draw_line(
+			left, right,
+			Color(accent.r, accent.g, accent.b, rib_alpha),
+			1.0 + energy * 1.2)
+
+	_draw_deck_chevrons(ls, total_w, energy, accent)
+	_draw_deck_light_beams(
+		ls, total_w, energy, accent, horizon_y, _frame_viewport_size.y)
+	_draw_deck_tier_wave(ls, total_w)
+	_draw_deck_collapse(ls, total_w)
+
+	# A restrained horizon crown makes the surface feel bolted into the stage.
+	var top_left := _gh_surface_points[0]
+	var top_right := _gh_surface_points[1]
+	draw_line(
+		top_left + Vector2(0.0, 1.0), top_right + Vector2(0.0, 1.0),
+		Color(accent.r, accent.g, accent.b, 0.05 + energy * 0.12), 10.0)
+	draw_line(
+		top_left, top_right,
+		Color(UITheme.ROCK_IVORY.r, UITheme.ROCK_IVORY.g, UITheme.ROCK_IVORY.b,
+			0.28 + energy * 0.24),
+		2.0)
+
+func _draw_arena_highway_rails(
+		ls: float, total_w: float, z_far: float, z_bot: float,
+		horizon_y: float, viewport_bottom: float) -> void:
+	var energy := _arena_combo_energy_display
+	var accent := _arena_accent_color()
+	for side_x in [ls, ls + total_w]:
+		var far_point := Vector2(_gh_x(side_x, z_far), horizon_y)
+		var near_point := Vector2(_gh_x(side_x, z_bot), viewport_bottom)
+		draw_line(far_point, near_point, Color(0.008, 0.007, 0.006, 0.96), 16.0)
+		draw_line(far_point, near_point, Color(0.25, 0.23, 0.21, 0.88), 8.0)
+		draw_line(far_point, near_point, Color(0.58, 0.54, 0.48, 0.72), 2.0)
+		if energy > 0.01:
+			var pulse := 0.72 + _beat_pulse * 0.28
+			draw_line(
+				far_point, near_point,
+				Color(accent.r, accent.g, accent.b, energy * 0.10 * pulse),
+				14.0)
+			draw_line(
+				far_point, near_point,
+				Color(accent.r, accent.g, accent.b, energy * 0.74 * pulse),
+				2.5)
+		if combo >= 100 and _effective_vfx_quality() != "performance":
+			var chaser := fposmod(
+				song_time_ms / maxf(_approach_time_ms(), 1.0)
+					* (0.58 + energy * 0.12),
+				1.0)
+			var segment_start := clampf(chaser - 0.10, 0.0, 1.0)
+			var segment_end := clampf(chaser + 0.10, 0.0, 1.0)
+			draw_line(
+				far_point.lerp(near_point, segment_start),
+				far_point.lerp(near_point, segment_end),
+				Color(accent.r, accent.g, accent.b, 0.50 + energy * 0.42),
+				4.0)
+
+# A held sustain is a light source, not just a bright shape. This throws its
+# spill onto the deck around it — wide, very soft, widest at the fret where the
+# rod burns into the board and falling off toward the horizon. Drawn before the
+# rod so the rod always sits on top of its own light.
+func _draw_sustain_light_spill(
+		top: Vector2, bottom: Vector2, top_half_w: float, bottom_half_w: float,
+		color: Color, heat: float) -> void:
+	var quality := _effective_vfx_quality()
+	if quality == "performance":
+		return
+	var spill := 0.11 + 0.10 * heat
+	# widest layer first; it reaches into the neighbouring lanes.
+	var layers := (
+		[[7.0, 0.55], [4.2, 0.80], [2.4, 1.0]] if quality == "full"
+		else [[5.0, 0.70], [2.6, 1.0]])
+	for layer in layers:
+		var width_scale: float = layer[0]
+		var layer_alpha: float = spill * float(layer[1])
+		var tw := top_half_w * width_scale
+		var bw := bottom_half_w * width_scale
+		# Fades to nothing at the far end, so the light looks cast rather than
+		# painted along the whole rod.
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(top.x - tw, top.y), Vector2(top.x + tw, top.y),
+				Vector2(bottom.x + bw, bottom.y),
+				Vector2(bottom.x - bw, bottom.y)]),
+			PackedColorArray([
+				Color(color.r, color.g, color.b, 0.0),
+				Color(color.r, color.g, color.b, 0.0),
+				Color(color.r, color.g, color.b, layer_alpha),
+				Color(color.r, color.g, color.b, layer_alpha)]))
+	# Pool of light where the rod meets the board.
+	var pool := bottom_half_w * (7.5 if quality == "full" else 5.5)
+	for ring in range(3):
+		var ring_t := 1.0 - float(ring) / 3.0
+		draw_circle(
+			bottom, pool * ring_t,
+			Color(color.r, color.g, color.b, (0.055 + 0.055 * heat) * ring_t))
+
+# A sustain reads as one glowing rod: soft outer bloom, solid body, near-white
+# core, all narrowing toward the horizon with the rest of the deck. `heat` is
+# how hard it is being held — it whitens the core and widens the bloom, so the
+# rod visibly lights up under the finger instead of just sitting there.
+func _draw_sustain_stick(
+		top: Vector2, bottom: Vector2, top_half_w: float, bottom_half_w: float,
+		base_color: Color, alpha: float, heat: float) -> void:
+	if alpha <= 0.01:
+		return
+	var body := base_color.lightened(0.12 + 0.28 * heat)
+	var core := base_color.lightened(0.55 + 0.42 * heat)
+	# width scale, alpha, colour — outer bloom first so the core lands on top.
+	for layer in [
+			[2.55 + 0.55 * heat, 0.13 + 0.11 * heat, base_color],
+			[1.0, 0.50 + 0.30 * heat, body],
+			[0.34, 0.82 + 0.18 * heat, core]]:
+		var width_scale: float = layer[0]
+		var layer_alpha: float = float(layer[1]) * alpha
+		var col: Color = layer[2]
+		var tw := top_half_w * width_scale
+		var bw := bottom_half_w * width_scale
+		# Dimmer at the far end so the rod reads as receding, not as a decal.
+		draw_polygon(
+			PackedVector2Array([
+				Vector2(top.x - tw, top.y), Vector2(top.x + tw, top.y),
+				Vector2(bottom.x + bw, bottom.y),
+				Vector2(bottom.x - bw, bottom.y)]),
+			PackedColorArray([
+				Color(col.r, col.g, col.b, layer_alpha * 0.45),
+				Color(col.r, col.g, col.b, layer_alpha * 0.45),
+				Color(col.r, col.g, col.b, layer_alpha),
+				Color(col.r, col.g, col.b, layer_alpha)]))
 
 func _draw_gh_highway(vp: Vector2) -> void:
 	var lw := _lane_width()
@@ -3736,22 +5826,33 @@ func _draw_gh_highway(vp: Vector2) -> void:
 	var z_bot := _gh_z_bottom()
 	var horizon_y := _gh_y(z_far)
 	var app_ms := _approach_time_ms()
+	var lane_border_color := _theme_color("lane_border", LANE_BORDER)
+	var rail_base_color := _theme_color("rail", UITheme.NEON_PURPLE)
+	var hit_line_color := _theme_color("hit", HIT_LINE_COLOR)
+	var beat_line_color := _theme_color("beat", Color(0.7, 0.75, 1.0))
 
-	# Highway surface — trapezoid, darker toward the horizon
+	# Highway surface — legacy theme or the optional combo-reactive Arena deck.
 	var tl := _gh_surface_points[0]
 	var tr := _gh_surface_points[1]
 	var br := _gh_surface_points[2]
 	var bl := _gh_surface_points[3]
-	draw_polygon(_gh_surface_points, _gh_surface_colors)
-	if combo >= 200 and combo < 500 and _vfx_heavy_enabled():
-		_draw_combo_streaks_gh(_gh_surface_points)
-	if combo >= 500 and _vfx_heavy_enabled():
-		_draw_hyperspeed_gh(_gh_surface_points)
+	if _arena_mode:
+		_draw_arena_highway_surface(vp, ls, total_w, z_far, z_bot, horizon_y)
+		beat_line_color = UITheme.ROCK_IVORY
+		hit_line_color = _arena_accent_color()
+		lane_border_color = UITheme.ROCK_STEEL
+	else:
+		draw_polygon(_gh_surface_points, _gh_surface_colors)
+		if combo >= 200 and combo < 500 and _vfx_heavy_enabled():
+			_draw_combo_streaks_gh(_gh_surface_points)
+		if combo >= 500 and _vfx_heavy_enabled():
+			_draw_hyperspeed_gh(_gh_surface_points)
 
-	# Horizon glow line
-	var hcol := UITheme.NEON_PURPLE
-	draw_line(tl + Vector2(0, 1), tr + Vector2(0, 1), Color(hcol.r, hcol.g, hcol.b, 0.10), 9.0)
-	draw_line(tl, tr, Color(hcol.r, hcol.g, hcol.b, 0.40), 2.0)
+		# Horizon glow line
+		var hcol := rail_base_color
+		draw_line(tl + Vector2(0, 1), tr + Vector2(0, 1),
+			Color(hcol.r, hcol.g, hcol.b, 0.10), 9.0)
+		draw_line(tl, tr, Color(hcol.r, hcol.g, hcol.b, 0.40), 2.0)
 
 	# Beat lines — scroll down the fretboard
 	var beat_start := maxi(0, _beat_idx - 6)
@@ -3767,23 +5868,32 @@ func _draw_gh_highway(vp: Vector2) -> void:
 		var bfade := clampf((app_ms - beat_until) / (app_ms * 0.3), 0.0, 1.0)
 		var ba := (0.26 if strong else 0.09) * bfade
 		draw_line(Vector2(_gh_x(ls, bz), by), Vector2(_gh_x(ls + total_w, bz), by),
-			Color(0.7, 0.75, 1.0, ba), 2.5 if strong else 1.2)
+			Color(beat_line_color.r, beat_line_color.g, beat_line_color.b, ba),
+			2.5 if strong else 1.2)
 
 	# Lane divider lines — converging toward the vanishing point
 	for i in range(lane_count + 1):
 		var xb := ls + i * lw
+		var divider_alpha := (
+			0.22 + _arena_combo_energy_display * 0.36 if _arena_mode else 0.5)
 		draw_line(Vector2(_gh_x(xb, z_far), horizon_y), Vector2(_gh_x(xb, z_bot), vp.y),
-			Color(LANE_BORDER.r, LANE_BORDER.g, LANE_BORDER.b, 0.5), 1.3)
+			Color(
+				lane_border_color.r, lane_border_color.g, lane_border_color.b,
+				divider_alpha),
+			1.3)
 
 	# Side rails — layered neon glow, pulse on beat, combo tier color
-	var rail_col := _combo_glow_color if _combo_glow_color.a > 0 else UITheme.NEON_PURPLE
-	var pulse_a := 0.55 + 0.40 * _beat_pulse
-	for side_x in [ls, ls + total_w]:
-		var p1 := Vector2(_gh_x(side_x, z_far), horizon_y)
-		var p2 := Vector2(_gh_x(side_x, z_bot), vp.y)
-		draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.10 * pulse_a), 12.0)
-		draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.28 * pulse_a), 5.0)
-		draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.85 * pulse_a), 2.0)
+	if _arena_mode:
+		_draw_arena_highway_rails(ls, total_w, z_far, z_bot, horizon_y, vp.y)
+	else:
+		var rail_col := _combo_glow_color if _combo_glow_color.a > 0 else rail_base_color
+		var pulse_a := 0.55 + 0.40 * _beat_pulse
+		for side_x in [ls, ls + total_w]:
+			var p1 := Vector2(_gh_x(side_x, z_far), horizon_y)
+			var p2 := Vector2(_gh_x(side_x, z_bot), vp.y)
+			draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.10 * pulse_a), 12.0)
+			draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.28 * pulse_a), 5.0)
+			draw_line(p1, p2, Color(rail_col.r, rail_col.g, rail_col.b, 0.85 * pulse_a), 2.0)
 
 	# Lane press streaks — light shoots up the lane while held
 	for li in range(lane_count):
@@ -3804,9 +5914,9 @@ func _draw_gh_highway(vp: Vector2) -> void:
 	# Hit line — glow across the highway
 	var hl1 := Vector2(ls, hit_y)
 	var hl2 := Vector2(ls + total_w, hit_y)
-	draw_line(hl1, hl2, Color(HIT_LINE_COLOR.r, HIT_LINE_COLOR.g, HIT_LINE_COLOR.b, 0.08), 16.0)
-	draw_line(hl1, hl2, Color(HIT_LINE_COLOR.r, HIT_LINE_COLOR.g, HIT_LINE_COLOR.b, 0.20), 6.0)
-	draw_line(hl1, hl2, Color(HIT_LINE_COLOR.r, HIT_LINE_COLOR.g, HIT_LINE_COLOR.b, 0.6), 1.5)
+	draw_line(hl1, hl2, Color(hit_line_color.r, hit_line_color.g, hit_line_color.b, 0.08), 16.0)
+	draw_line(hl1, hl2, Color(hit_line_color.r, hit_line_color.g, hit_line_color.b, 0.20), 6.0)
+	draw_line(hl1, hl2, Color(hit_line_color.r, hit_line_color.g, hit_line_color.b, 0.6), 1.5)
 
 	# Wide colored pads make the exact Perfect area obvious on touchscreens.
 	# The metal frets stay on top to preserve Guitar Mode's visual identity.
@@ -3835,7 +5945,7 @@ func _draw_gh_highway(vp: Vector2) -> void:
 		else:
 			_draw_gh_fret(center, r, c.darkened(0.48), 0.72, false)
 		# combo tier ring
-		if _combo_glow_color.a > 0:
+		if _combo_glow_color.a > 0 and not _arena_mode:
 			var gz_pulse := 0.1 * sin(_frame_time_msec * 0.005)
 			draw_arc(center, r * 1.24, 0, TAU, 18,
 				Color(_combo_glow_color.r, _combo_glow_color.g, _combo_glow_color.b, _combo_glow_color.a * 0.5 + gz_pulse), 2.0)
@@ -3867,12 +5977,23 @@ func _draw_gh_highway(vp: Vector2) -> void:
 	# --- Notes (fret caps with perspective) ---
 	# Draw far-to-near. The previous order let farther frets paint over closer
 	# notes, which made dense consecutive streams look like one opaque stack.
-	var last_visible_note := first_visible_idx - 1
-	for scan_idx in range(first_visible_idx, notes.size()):
+	var last_visible_note := _first_drawn_idx - 1
+	var sustain_lightning_candidates := 0
+	for scan_idx in range(_first_drawn_idx, notes.size()):
 		if float(notes[scan_idx]["time_ms"]) - song_time_ms > app_ms:
 			break
 		last_visible_note = scan_idx
-	for idx in range(last_visible_note, first_visible_idx - 1, -1):
+		var scan_note = notes[scan_idx]
+		if note_state[scan_idx] == 0 \
+				and float(scan_note["duration_ms"]) >= SUSTAIN_LIGHTNING_MIN_DURATION_MS \
+				and int(scan_note["lane"]) < lane_count \
+				and (int(scan_note.get("assist_cluster_id", -1)) < 0 \
+					or bool(scan_note.get("assist_cluster_leader", false))):
+			sustain_lightning_candidates += 1
+	var sustain_lightning_previews := 0
+	var sustain_lightning_previews_to_skip := maxi(
+		0, sustain_lightning_candidates - _sustain_lightning_preview_cap())
+	for idx in range(last_visible_note, _first_drawn_idx - 1, -1):
 		var n = notes[idx]
 		var t: float = n["time_ms"]
 		var time_until := t - song_time_ms
@@ -3893,6 +6014,18 @@ func _draw_gh_highway(vp: Vector2) -> void:
 		var gr := lw * GH_NOTE_FRET_RADIUS_RATIO / z
 		var is_hit := (state == 1)
 		var is_holding := (state == 3)
+		var dur_ms: float = n["duration_ms"]
+
+		# Cull scrolled-past notes before drawing anything. The tail sits above
+		# the head, so a long note is still on screen after its head has gone —
+		# test the top of the trail, not the gem.
+		if is_hit:
+			var trail_top_y := gy
+			if dur_ms > 0.0:
+				trail_top_y = _gh_y(
+					minf(_gh_z_for((t + dur_ms) - song_time_ms), z_far))
+			if trail_top_y > vp.y + gr * 2.0:
+				continue
 
 		# Fade in near the horizon
 		var ratio := 1.0 - (time_until / app_ms)
@@ -3903,10 +6036,6 @@ func _draw_gh_highway(vp: Vector2) -> void:
 			var od_pulse := 0.58 + 0.24 * sin(_frame_time_msec * 0.008 + lane)
 			draw_arc(Vector2(gx, gy), gr * 1.24, 0.0, TAU, 28,
 				Color(0.72, 0.92, 1.0, od_pulse * note_alpha), maxf(2.0, gr * 0.10), true)
-		if is_hit and gy > vp.y + gr * 2.0:
-			continue
-
-		var dur_ms: float = n["duration_ms"]
 
 		# --- Sustain trail ---
 		if dur_ms > 0:
@@ -3914,60 +6043,57 @@ func _draw_gh_highway(vp: Vector2) -> void:
 			var tz := minf(_gh_z_for(tail_until), z_far)
 			var t_cx := _gh_x(lane_cx_bottom, tz)
 			var t_y := _gh_y(tz)
-			var t_w := lw * 0.20 / tz
+			var t_w := lw * SUSTAIN_ROD_HALF_WIDTH / tz
 			var cc: Color = lane_colors[lane]
 
 			if is_holding:
-				# Trail tapers from the tail down to the fret; head locked at hit line
-				var h_w := lw * 0.20
-				var pulse := 0.15 * sin(_frame_time_msec * 0.008)
-				draw_polygon(PackedVector2Array([
-					Vector2(t_cx - t_w, t_y), Vector2(t_cx + t_w, t_y),
-					Vector2(lane_cx_bottom + h_w, hit_y), Vector2(lane_cx_bottom - h_w, hit_y)]),
-					PackedColorArray([
-						Color(cc.r, cc.g, cc.b, 0.12), Color(cc.r, cc.g, cc.b, 0.12),
-						Color(cc.r, cc.g, cc.b, 0.7 + pulse), Color(cc.r, cc.g, cc.b, 0.7 + pulse)]))
-				# Hold aura — pulsing glow + expanding ring around the head
-				var hold_pulse := 0.5 + 0.5 * sin(_frame_time_msec * 0.012)
-				var ring_center := Vector2(lane_cx_bottom, hit_y)
-				draw_circle(ring_center, lw * (0.38 + 0.04 * hold_pulse),
-					Color(cc.r, cc.g, cc.b, 0.08 + 0.05 * hold_pulse))
-				# Keep the flame behind the fret so it appears to rise from the held
-				# note instead of being pasted over the circular button.
+				# Head is locked at the hit line while the rod burns down into it.
+				var hold_pulse := 0.5 + 0.5 * sin(
+					_frame_time_msec * 0.012 + lane * 0.7)
+				var head_center := Vector2(lane_cx_bottom, hit_y)
+				_draw_sustain_light_spill(
+					Vector2(t_cx, t_y), head_center,
+					t_w, lw * SUSTAIN_ROD_HALF_WIDTH, cc,
+					0.70 + 0.30 * hold_pulse)
+				_draw_sustain_stick(
+					Vector2(t_cx, t_y), head_center,
+					t_w, lw * SUSTAIN_ROD_HALF_WIDTH, cc, 1.0,
+					0.70 + 0.30 * hold_pulse)
+				_draw_sustain_lightning_column(
+					Vector2(t_cx, t_y), head_center,
+					cc.lightened(0.30),
+					_sustain_lightning_intensity(
+						dur_ms, time_until, app_ms, true),
+					idx, lane, true)
+				# Tight contact flare where the rod meets the fret. The old hold
+				# stacked smoke, two animated rings and orbiting sparks here,
+				# which buried the rod under clutter.
+				draw_circle(head_center, lw * (0.29 + 0.05 * hold_pulse),
+					Color(cc.r, cc.g, cc.b, 0.10 + 0.08 * hold_pulse))
 				if combo >= 100:
-					var burn_alpha := 0.88 if combo >= 300 else 0.78
-					if _vfx_heavy_enabled():
-						_draw_fx_loop_smooth("sustain_smoke",
-							ring_center + Vector2(0.0, -lw * 0.40), lw * 0.70,
-							Color(0.82, 0.79, 0.75, 0.26), 0.58, lane * 0.37 + 0.20)
 					_draw_fx_loop_smooth("sustain_fire",
-						ring_center + Vector2(0.0, -lw * 0.24), lw * 0.58,
-						Color(1.0, 1.0, 1.0, burn_alpha), 0.82, lane * 0.41)
-				_draw_gh_fret(ring_center, lw * GH_NOTE_FRET_RADIUS_RATIO, cc, 1.0, false)
-				# The Brackeys ring is drawn after the fret, so its animated edge is
-				# always visible instead of being buried behind the large button.
-				var ring_h := lw * (0.78 + 0.035 * hold_pulse)
-				var ring_color := cc.lightened(0.28)
-				_draw_fx_loop_smooth("hold_ring", ring_center, ring_h,
-					Color(ring_color.r, ring_color.g, ring_color.b, 0.98), 0.88, lane * 0.31)
-				_draw_fx_loop_smooth("hold_ring", ring_center, ring_h * 0.93,
-					Color(1.0, 1.0, 1.0, 0.32), 0.88, lane * 0.31)
-				var orbit_time := _frame_time_msec * 0.0048 + lane * 0.9
-				var spark_count := 3 if _effective_vfx_quality() == "performance" else 5
-				for spark_i in range(spark_count):
-					var spark_angle := orbit_time + TAU * float(spark_i) / float(spark_count)
-					var spark_pos := ring_center + Vector2.from_angle(spark_angle) * lw * 0.405
-					draw_circle(spark_pos, maxf(2.0, lw * 0.018), Color(1, 1, 1, 0.95))
+						head_center + Vector2(0.0, -lw * 0.22), lw * 0.46,
+						Color(1.0, 1.0, 1.0, 0.58), 0.82, lane * 0.41)
+				_draw_gh_fret(
+					head_center, lw * GH_NOTE_FRET_RADIUS_RATIO, cc, 1.0, false)
 				continue
 			else:
-				var head_w := lw * 0.20 / z
-				var trail_a := 0.15 if is_hit else 0.35
-				draw_polygon(PackedVector2Array([
-					Vector2(t_cx - t_w, t_y), Vector2(t_cx + t_w, t_y),
-					Vector2(gx + head_w, gy), Vector2(gx - head_w, gy)]),
-					PackedColorArray([
-						Color(cc.r, cc.g, cc.b, trail_a * 0.35 * note_alpha), Color(cc.r, cc.g, cc.b, trail_a * 0.35 * note_alpha),
-						Color(cc.r, cc.g, cc.b, trail_a * note_alpha), Color(cc.r, cc.g, cc.b, trail_a * note_alpha)]))
+				var head_w := lw * SUSTAIN_ROD_HALF_WIDTH / z
+				_draw_sustain_stick(
+					Vector2(t_cx, t_y), Vector2(gx, gy), t_w, head_w, cc,
+					(0.32 if is_hit else 0.90) * note_alpha, 0.0)
+				var preview_intensity := _sustain_lightning_intensity(
+					dur_ms, time_until, app_ms, false, is_hit)
+				if not is_hit and dur_ms >= SUSTAIN_LIGHTNING_MIN_DURATION_MS:
+					if sustain_lightning_previews_to_skip > 0:
+						sustain_lightning_previews_to_skip -= 1
+					elif preview_intensity > 0.01 \
+							and sustain_lightning_previews < _sustain_lightning_preview_cap():
+						_draw_sustain_lightning_column(
+							Vector2(t_cx, t_y), Vector2(gx, gy),
+							cc.lightened(0.24), preview_intensity,
+							idx, lane, false)
+						sustain_lightning_previews += 1
 
 		# --- Fret head ---
 		if not is_holding:
@@ -4064,7 +6190,26 @@ func _gh_z_bottom() -> float:
 
 # --- Input (press AND release) ---
 
+func _handle_game_back() -> bool:
+	if is_loading:
+		_on_loading_back()
+		return true
+	if _paused:
+		_resume_game()
+		return true
+	if song_started and _countdown <= 0.0:
+		_pause_game()
+		return true
+	return false
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST and is_inside_tree():
+		call_deferred("_handle_game_back")
+
 func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and _handle_game_back():
+		get_viewport().set_input_as_handled()
+		return
 	if not song_started or is_loading or _countdown > 0 or _paused:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
@@ -4269,6 +6414,11 @@ func _try_hit(lane: int, judgment: String = "perfect") -> void:
 		_spawn_lightning(Vector2(fret_pos.x + randf_range(-25, 25), strike_top), fret_pos)
 		if _effective_vfx_quality() != "performance":
 			_spawn_lightning(Vector2(fret_pos.x + randf_range(-60, 60), strike_top), fret_pos, BOLT_COLOR, 0.14)
+		# Surge runs the deck in the new tier's colour, toward the player.
+		_arena_tier_wave = 1.0
+		_arena_tier_wave_color = (
+			_combo_glow_color if _combo_glow_color.a > 0.0
+			else UITheme.NEON_CYAN)
 
 	# Log first 20 hits for drift diagnosis
 	if _hit_log_count < 20:
@@ -4344,6 +6494,11 @@ func _spawn_combo_milestone_fx(milestone: int, fret_pos: Vector2, lane_color: Co
 				Color(tier_color.r, tier_color.g, tier_color.b, 0.94))
 
 func _spawn_combo_break_fx(lane: int, broken_combo: int) -> void:
+	# The whole deck discharges, not just the lane that was missed. Bigger
+	# streaks cost more, so the loss scales with what was actually lost.
+	_arena_collapse = 1.0
+	_arena_collapse_strength = clampf(
+		float(broken_combo) / ARENA_COLLAPSE_FULL_COMBO, 0.35, 1.0)
 	var lw := _lane_width()
 	var origin := Vector2(_lanes_start_x() + (lane + 0.5) * lw, _hit_line_y())
 	_spawn_sprite_fx("hold_ring", origin, lw * (1.28 if broken_combo >= 100 else 1.05),
@@ -4459,12 +6614,47 @@ func _on_song_finished() -> void:
 		if note_state[idx] == 0:
 			miss_count += 1
 	total_notes = notes.size()
+	if BattleSession.match_active:
+		BattleSession.notify_game_finished({
+			"score": score,
+			"combo": combo,
+			"health": _rock_meter_value,
+			"song_ms": int(song_time_ms),
+		})
 	# Save score and go to result screen
 	var is_record := _save_score()
 	_show_result_screen(is_record)
 
+func _on_multiplayer_scoreboard_changed(_snapshot: Dictionary) -> void:
+	_multiplayer_scoreboard_dirty = true
+
+func _update_live_multiplayer_scoreboard(delta: float) -> void:
+	if not SHOW_LIVE_MULTIPLAYER_SCOREBOARD \
+			or not is_instance_valid(multiplayer_scoreboard_label):
+		return
+	_multiplayer_scoreboard_elapsed += delta
+	if not _multiplayer_scoreboard_dirty \
+			or _multiplayer_scoreboard_elapsed < LIVE_MULTIPLAYER_SCOREBOARD_INTERVAL:
+		return
+	_multiplayer_scoreboard_elapsed = 0.0
+	_multiplayer_scoreboard_dirty = false
+	var scoreboard_text := BattleSession.get_scoreboard_text()
+	if scoreboard_text != _last_multiplayer_scoreboard_text:
+		_last_multiplayer_scoreboard_text = scoreboard_text
+		multiplayer_scoreboard_label.text = scoreboard_text
+
+func _on_multiplayer_band_failed() -> void:
+	if _song_failed:
+		return
+	_song_failed = true
+	call_deferred("_fail_song")
+
 # Returns true when an existing best score was beaten.
 func _save_score() -> bool:
+	# A run with unlimited overdrive would permanently outrank every honest one,
+	# so it is played but never recorded.
+	if _unlimited_overdrive_active():
+		return false
 	var scores_path := "user://scores.json"
 	var scores := {}
 	if FileAccess.file_exists(scores_path):
@@ -4514,18 +6704,11 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 	add_child(result_layer)
 
 	var panel := ColorRect.new()
-	panel.color = Color(0.02, 0.015, 0.05, 0.96)
+	panel.color = Color(0.008, 0.006, 0.028, 0.975)
 	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	panel.theme = _create_theme()
 	result_layer.add_child(panel)
-
-	# Soft glow blobs behind the card
-	var glow1 := UITheme._make_glow_blob(UITheme.NEON_PURPLE, 0.12)
-	glow1.position = Vector2(get_viewport_rect().size.x * 0.5 - 310, -220)
-	panel.add_child(glow1)
-	var glow2 := UITheme._make_glow_blob(UITheme.NEON_CYAN, 0.08)
-	glow2.position = Vector2(get_viewport_rect().size.x * 0.5 - 310, get_viewport_rect().size.y - 400)
-	panel.add_child(glow2)
+	UITheme.add_neon_background(panel, 2)
 
 	var scroll := ScrollContainer.new()
 	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -4541,9 +6724,13 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 	scroll.add_child(center)
 
 	var vbox := VBoxContainer.new()
-	vbox.custom_minimum_size = Vector2(minf(_u(430), get_viewport_rect().size.x - _u(64)), 0)
+	vbox.custom_minimum_size = Vector2(
+		minf(_u(520), get_viewport_rect().size.x - _u(64)), 0)
 	vbox.add_theme_constant_override("separation", int(_u(12)))
 	center.add_child(vbox)
+	var result_crest := UITheme.make_game_logo(_u(88))
+	result_crest.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	vbox.add_child(result_crest)
 
 	var accuracy := (float(hit_count) / float(total_notes) * 100.0) if total_notes > 0 else 0.0
 	var stars := _calc_stars(accuracy)
@@ -4551,7 +6738,7 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 	var result_title := Label.new()
 	result_title.text = I18n.t("song_failed") if failed else I18n.t("result_title")
 	result_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	result_title.add_theme_font_size_override("font_size", _fs(36))
+	result_title.add_theme_font_size_override("font_size", _fs(42))
 	var title_color := Color(1.0, 0.12, 0.08) if failed else UITheme.NEON_CYAN
 	result_title.add_theme_color_override("font_color", title_color.lightened(0.18))
 	result_title.add_theme_color_override("font_shadow_color", Color(title_color.r, title_color.g, title_color.b, 0.55))
@@ -4561,6 +6748,14 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 	if UITheme.font_bold():
 		result_title.add_theme_font_override("font", UITheme.font_bold())
 	vbox.add_child(result_title)
+	if BattleSession.match_active:
+		var standings := Label.new()
+		standings.text = BattleSession.get_scoreboard_text()
+		standings.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		standings.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		standings.add_theme_font_size_override("font_size", _fs(18))
+		standings.add_theme_color_override("font_color", UITheme.NEON_GOLD)
+		vbox.add_child(standings)
 	if failed:
 		var fail_reason := Label.new()
 		fail_reason.text = I18n.t("rock_meter_empty")
@@ -4585,7 +6780,7 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 		vbox.add_child(record_lbl)
 		# Pulse the badge
 		record_lbl.resized.connect(func(): record_lbl.pivot_offset = record_lbl.size / 2.0)
-		var pulse := create_tween()
+		var pulse := record_lbl.create_tween()
 		pulse.set_loops()
 		pulse.tween_property(record_lbl, "scale", Vector2(1.06, 1.06), 0.5) \
 			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -4641,7 +6836,8 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 
 	# Stats card
 	var stats_panel := PanelContainer.new()
-	stats_panel.add_theme_stylebox_override("panel", UITheme.card_style())
+	stats_panel.add_theme_stylebox_override(
+		"panel", UITheme.card_style(UITheme.NEON_PURPLE))
 	vbox.add_child(stats_panel)
 
 	var stats_vbox := VBoxContainer.new()
@@ -4683,18 +6879,21 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 	# Base and assisted variants progress as pairs, ending with faithful charts.
 	var preset_order: Array = PlayabilityScript.PRESET_ORDER
 	var current_idx := preset_order.find(song_preset)
-	if not failed and current_idx >= 0 and current_idx < preset_order.size() - 1:
+	if not BattleSession.match_active and not failed \
+			and current_idx >= 0 and current_idx < preset_order.size() - 1:
 		var next_preset: String = preset_order[current_idx + 1]
 		var next_btn := Button.new()
-		next_btn.text = I18n.t("next_preset", [I18n.preset_name(next_preset)])
+		next_btn.text = "▶  %s" % I18n.t(
+			"next_preset", [I18n.preset_name(next_preset)]).to_upper()
 		UITheme.style_primary_button(next_btn, UITheme.NEON_GREEN, _fs(22))
-		next_btn.custom_minimum_size = Vector2(0, _u(66))
+		next_btn.custom_minimum_size = Vector2(0, _u(82))
 		next_btn.pressed.connect(func():
 			song_preset = next_preset
 			get_tree().reload_current_scene()
 		)
 		vbox.add_child(next_btn)
-	elif not failed and current_idx == preset_order.size() - 1:
+	elif not BattleSession.match_active and not failed \
+			and current_idx == preset_order.size() - 1:
 		# Completed Sadık — show congratulations
 		var congrats := Label.new()
 		congrats.text = I18n.t("all_levels_done")
@@ -4705,19 +6904,20 @@ func _show_result_screen(is_record: bool = false, failed: bool = false) -> void:
 		vbox.add_child(congrats)
 
 	# Retry button
-	var retry_btn := Button.new()
-	retry_btn.text = I18n.t("play_again")
-	UITheme.style_primary_button(retry_btn, UITheme.NEON_CYAN, _fs(20))
-	retry_btn.custom_minimum_size = Vector2(0, _u(62))
-	retry_btn.pressed.connect(func(): get_tree().reload_current_scene())
-	vbox.add_child(retry_btn)
+	if not BattleSession.match_active:
+		var retry_btn := Button.new()
+		retry_btn.text = "↻  %s" % I18n.t("play_again").to_upper()
+		UITheme.style_primary_button(retry_btn, UITheme.NEON_CYAN, _fs(20))
+		retry_btn.custom_minimum_size = Vector2(0, _u(76))
+		retry_btn.pressed.connect(func(): get_tree().reload_current_scene())
+		vbox.add_child(retry_btn)
 
 	# Back to menu button
 	var menu_btn := Button.new()
-	menu_btn.text = I18n.t("song_list")
+	menu_btn.text = "‹  %s" % I18n.t("song_list").to_upper()
 	UITheme.style_ghost_button(menu_btn, _fs(19))
-	menu_btn.custom_minimum_size = Vector2(0, _u(60))
-	menu_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/menu.tscn"))
+	menu_btn.custom_minimum_size = Vector2(0, _u(72))
+	menu_btn.pressed.connect(_return_to_menu)
 	vbox.add_child(menu_btn)
 
 	# Fade in
@@ -4730,6 +6930,7 @@ func _on_offset_changed(val: float) -> void:
 	offset_label.text = I18n.t("offset_label", [int(val)])
 
 func _exit_tree() -> void:
+	_teardown_vocals()
 	if _music_duck_tween and _music_duck_tween.is_valid():
 		_music_duck_tween.kill()
 	var music_bus_idx := AudioServer.get_bus_index("Music")

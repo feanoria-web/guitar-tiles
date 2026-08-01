@@ -2,6 +2,8 @@ extends RefCounted
 class_name Settings
 
 const SETTINGS_PATH := "user://settings.json"
+const CUSTOM_ARENA_HIGHWAY_DIR := "user://visuals"
+const CUSTOM_ARENA_HIGHWAY_PATH := "user://visuals/arena_highway.png"
 
 # Defaults
 static var approach_time_sec: float = 1.4
@@ -11,6 +13,15 @@ static var vfx_quality: String = "balanced"  # "full", "balanced" or "performanc
 static var rock_meter_mode: String = "visual" # "off", "visual" or "fail"
 static var crowd_audio_enabled: bool = true
 static var miss_sfx_enabled: bool = true
+static var guitar_highway_theme: String = "neon" # "neon", "classic" or "midnight"
+static var guitar_presentation_mode: String = "classic" # "classic" or "arena"
+static var arena_fret_skin: String = "blade" # "blade", "anvil" or "coil"
+static var arena_custom_highway_enabled: bool = false
+# Unlocked by a hidden tap combination on the tester-thanks card. Single player
+# only — the game refuses to honour it while a multiplayer match is live.
+static var unlimited_overdrive: bool = false
+static var pixel_stage_enabled: bool = true
+static var pixel_stage_intensity: String = "live" # "subtle" or "live"
 
 static func load_settings() -> void:
 	if not FileAccess.file_exists(SETTINGS_PATH):
@@ -43,6 +54,32 @@ static func load_settings() -> void:
 			crowd_audio_enabled = bool(data["crowd_audio_enabled"])
 		if data.has("miss_sfx_enabled"):
 			miss_sfx_enabled = bool(data["miss_sfx_enabled"])
+		if data.has("guitar_highway_theme"):
+			var saved_theme := String(data["guitar_highway_theme"])
+			if saved_theme in ["neon", "classic", "midnight"]:
+				guitar_highway_theme = saved_theme
+		if data.has("guitar_presentation_mode"):
+			var saved_presentation := String(data["guitar_presentation_mode"])
+			if saved_presentation in ["classic", "arena"]:
+				guitar_presentation_mode = saved_presentation
+		if data.has("arena_fret_skin"):
+			var saved_fret_skin := String(data["arena_fret_skin"])
+			if saved_fret_skin in ["blade", "anvil", "coil"]:
+				arena_fret_skin = saved_fret_skin
+		if data.has("unlimited_overdrive"):
+			unlimited_overdrive = bool(data["unlimited_overdrive"])
+		if data.has("arena_custom_highway_enabled"):
+			arena_custom_highway_enabled = bool(
+				data["arena_custom_highway_enabled"])
+		if (arena_custom_highway_enabled
+				and not FileAccess.file_exists(CUSTOM_ARENA_HIGHWAY_PATH)):
+			arena_custom_highway_enabled = false
+		if data.has("pixel_stage_enabled"):
+			pixel_stage_enabled = bool(data["pixel_stage_enabled"])
+		if data.has("pixel_stage_intensity"):
+			var saved_stage_intensity := String(data["pixel_stage_intensity"])
+			if saved_stage_intensity in ["subtle", "live"]:
+				pixel_stage_intensity = saved_stage_intensity
 
 static func save_settings() -> void:
 	var data := {
@@ -53,6 +90,13 @@ static func save_settings() -> void:
 		"rock_meter_mode": rock_meter_mode,
 		"crowd_audio_enabled": crowd_audio_enabled,
 		"miss_sfx_enabled": miss_sfx_enabled,
+		"guitar_highway_theme": guitar_highway_theme,
+		"guitar_presentation_mode": guitar_presentation_mode,
+		"arena_fret_skin": arena_fret_skin,
+		"arena_custom_highway_enabled": arena_custom_highway_enabled,
+		"unlimited_overdrive": unlimited_overdrive,
+		"pixel_stage_enabled": pixel_stage_enabled,
+		"pixel_stage_intensity": pixel_stage_intensity,
 	}
 	var f := FileAccess.open(SETTINGS_PATH, FileAccess.WRITE)
 	if f:

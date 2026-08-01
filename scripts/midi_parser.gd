@@ -36,6 +36,29 @@ const CHORD_TICK_TOLERANCE := 10
 var resolution: int = 480
 var bpm_events: Array = []    # [{tick, bpm}]
 var notes: Array = []         # [{time_ms, lane, duration_ms}]
+# --- Vocals (karaoke mode) ---
+# Rock Band encodes sung pitch as MIDI notes 36-84 on PART VOCALS, one note per
+# syllable, with the syllable itself as a lyric meta event at the same tick.
+# Harmonies live on PART HARM1/2/3; HARM1 duplicates the lead.
+const VOCAL_TRACKS := {
+	"lead": "PART VOCALS",
+	"harm1": "PART HARM1",
+	"harm2": "PART HARM2",
+	"harm3": "PART HARM3",
+}
+const VOCAL_PITCH_MIN := 36
+const VOCAL_PITCH_MAX := 84
+const VOCAL_PHRASE_NOTE := 105        # phrase marker
+const VOCAL_PHRASE_NOTE_ALT := 106    # player 2 phrase (RB2 duets)
+const VOCAL_PERCUSSION_NOTES := [96, 97]
+const VOCAL_OVERDRIVE_NOTE := 116
+
+# part key -> Array of {time_ms, end_ms, midi_note, text, non_pitched, slide,
+#                       word_continues, joins, hidden}
+var vocal_parts: Dictionary = {}
+var vocal_phrases: Array = []      # [{start_ms, end_ms, overdrive}]
+var vocal_percussion: Array = []   # [{time_ms}]
+
 var lyrics: Array = []        # [{time_ms, text}]
 var lyric_phrases: Array = [] # [{start_ms, end_ms, text, syllables}]
 var overdrive_phrases: Array = [] # [{start_ms, end_ms}]
@@ -149,6 +172,8 @@ func parse_data(data: PackedByteArray, difficulty: String = "Expert", instrument
 			_extract_lyrics(track)
 			break
 
+	_extract_vocals(tracks)
+
 	print("MidiParser: %d notes, %d lyric phrases" % [notes.size(), lyric_phrases.size()])
 	return true
 
@@ -230,6 +255,24 @@ static func scan_instruments_from_data(data: PackedByteArray) -> Dictionary:
 				diffs.append(diff)
 		if diffs.size() > 0:
 			result[inst_key] = diffs
+
+	# Vocals is not on the difficulty-range scheme the instrument tracks use:
+	# PART VOCALS carries one line, and difficulty only changes how tight the
+	# pitch tolerance is. Offer it whenever the chart actually has sung notes.
+	for track in tracks:
+		if track["name"].to_upper() != VOCAL_TRACKS["lead"]:
+			continue
+		var sung := 0
+		for ev in track["events"]:
+			if ev["type"] == "note_on" \
+					and int(ev["note"]) >= VOCAL_PITCH_MIN \
+					and int(ev["note"]) <= VOCAL_PITCH_MAX:
+				sung += 1
+				if sung >= 8:
+					break
+		if sung >= 8:
+			result["vocals"] = DIFFICULTIES.duplicate()
+		break
 	return result
 
 # --- Track parsing ---
@@ -419,6 +462,182 @@ func _extract_gameplay_phrases(track: Dictionary) -> void:
 	solo_sections.sort_custom(func(a, b): return a["start_ms"] < b["start_ms"])
 
 # --- Lyric extraction ---
+
+# Splits a raw lyric syllable into its display text plus the vocal markers Rock
+# Band encodes into it. _extract_lyrics() strips these and throws them away,
+# which is right for the guitar-mode lyric strip but loses everything karaoke
+# needs to know about how a syllable is sung.
+static func parse_vocal_syllable(raw: String) -> Dictionary:
+	var text := raw.strip_edges()
+	var out := {
+		"text": "",
+		"non_pitched": false,   # '#' / '^' — any pitch counts, just make noise
+		"slide": false,         # '+' — continues the previous note's pitch
+		"word_continues": false,# '-' / '=' — next syllable finishes the word
+		"joins": false,         # '§' — glue to the next syllable with no space
+		"hidden": false,        # '$' — harmony duplicate, not displayed
+	}
+	if text == "+":
+		out["slide"] = true
+		return out
+	# Markers may sit on either end; consume them from both.
+	var changed := true
+	while changed and text.length() > 0:
+		changed = false
+		for marker in ["#", "^", "§", "=", "$", "+"]:
+			if text.begins_with(marker):
+				text = text.substr(1)
+				changed = true
+			if text.length() > 0 and text.ends_with(marker):
+				text = text.substr(0, text.length() - 1)
+				changed = true
+		if raw.find("#") >= 0 or raw.find("^") >= 0:
+			out["non_pitched"] = true
+		if raw.find("§") >= 0:
+			out["joins"] = true
+		if raw.find("$") >= 0:
+			out["hidden"] = true
+		if raw.find("+") >= 0:
+			out["slide"] = true
+	# A trailing hyphen means the word carries into the next syllable.
+	if text.ends_with("-"):
+		out["word_continues"] = true
+		text = text.substr(0, text.length() - 1)
+	if raw.strip_edges().ends_with("="):
+		out["word_continues"] = true
+	out["text"] = text.strip_edges()
+	return out
+
+# Builds the karaoke chart: pitched syllables per part, phrase boundaries and
+# percussion hits. Runs independently of _extract_lyrics so the existing lyric
+# strip keeps behaving exactly as before.
+## True when this chart carries a singable vocal line. Phase 5 needs it to
+## decide whether to offer vocals for a song; deliberately not surfaced in any
+## UI yet, because selecting vocals has nowhere to go until the mode is wired up.
+func has_vocals() -> bool:
+	var lead: Array = vocal_parts.get("lead", [])
+	return lead.size() > 0 and vocal_phrases.size() > 0
+
+
+func _extract_vocals(tracks: Array) -> void:
+	vocal_parts.clear()
+	vocal_phrases.clear()
+	vocal_percussion.clear()
+	var by_name := {}
+	for track in tracks:
+		by_name[String(track["name"]).to_upper()] = track
+
+	for part_key in VOCAL_TRACKS:
+		var track_name: String = VOCAL_TRACKS[part_key]
+		if not by_name.has(track_name):
+			continue
+		var part_notes := _extract_vocal_notes(by_name[track_name])
+		if not part_notes.is_empty():
+			vocal_parts[part_key] = part_notes
+
+	if vocal_parts.is_empty():
+		return
+
+	# Phrase markers live on the lead track; HARM2/3 inherit them.
+	var phrase_source = by_name.get("PART VOCALS", by_name.get("PART HARM1", null))
+	if phrase_source != null:
+		vocal_phrases = _extract_vocal_phrases(phrase_source)
+		for ev in phrase_source["events"]:
+			if ev["type"] == "note_on" and int(ev["note"]) in VOCAL_PERCUSSION_NOTES:
+				vocal_percussion.append({
+					"time_ms": ChartParserScript.tick_to_ms(
+						ev["tick"], bpm_events, resolution)})
+
+	var part_summary := ""
+	for part_key in vocal_parts:
+		part_summary += " %s=%d" % [part_key, (vocal_parts[part_key] as Array).size()]
+	print("MidiParser: vocals%s, %d phrases, %d percussion" % [
+		part_summary, vocal_phrases.size(), vocal_percussion.size()])
+
+func _extract_vocal_notes(track: Dictionary) -> Array:
+	# Syllable text is a lyric meta event at the same tick as its note.
+	var lyric_at_tick := {}
+	for ev in track["events"]:
+		if ev["type"] == "lyric" or ev["type"] == "text":
+			var raw: String = ev["text"]
+			# Section/mood tags are not sung.
+			if raw.begins_with("[") and raw.strip_edges().ends_with("]"):
+				continue
+			lyric_at_tick[int(ev["tick"])] = raw
+
+	var open_notes := {}   # midi note -> start tick
+	var result: Array = []
+	for ev in track["events"]:
+		var note_value := int(ev.get("note", -1))
+		if note_value < VOCAL_PITCH_MIN or note_value > VOCAL_PITCH_MAX:
+			continue
+		if ev["type"] == "note_on":
+			open_notes[note_value] = int(ev["tick"])
+		elif ev["type"] == "note_off" and open_notes.has(note_value):
+			var start_tick: int = open_notes[note_value]
+			open_notes.erase(note_value)
+			var end_tick := int(ev["tick"])
+			if end_tick <= start_tick:
+				continue
+			var syllable := parse_vocal_syllable(
+				String(lyric_at_tick.get(start_tick, "")))
+			result.append({
+				"time_ms": ChartParserScript.tick_to_ms(
+					start_tick, bpm_events, resolution),
+				"end_ms": ChartParserScript.tick_to_ms(
+					end_tick, bpm_events, resolution),
+				"midi_note": note_value,
+				"text": syllable["text"],
+				"non_pitched": syllable["non_pitched"],
+				"slide": syllable["slide"],
+				"word_continues": syllable["word_continues"],
+				"joins": syllable["joins"],
+				"hidden": syllable["hidden"],
+			})
+	result.sort_custom(func(a, b): return a["time_ms"] < b["time_ms"])
+	return result
+
+func _extract_vocal_phrases(track: Dictionary) -> Array:
+	var overdrive_ranges: Array = []
+	var overdrive_open := -1
+	for ev in track["events"]:
+		if int(ev.get("note", -1)) != VOCAL_OVERDRIVE_NOTE:
+			continue
+		if ev["type"] == "note_on":
+			overdrive_open = int(ev["tick"])
+		elif ev["type"] == "note_off" and overdrive_open >= 0:
+			overdrive_ranges.append([overdrive_open, int(ev["tick"])])
+			overdrive_open = -1
+
+	var phrases: Array = []
+	var open_starts := {}
+	for ev in track["events"]:
+		var note_value := int(ev.get("note", -1))
+		if note_value != VOCAL_PHRASE_NOTE and note_value != VOCAL_PHRASE_NOTE_ALT:
+			continue
+		if ev["type"] == "note_on":
+			open_starts[note_value] = int(ev["tick"])
+		elif ev["type"] == "note_off" and open_starts.has(note_value):
+			var start_tick: int = open_starts[note_value]
+			open_starts.erase(note_value)
+			var end_tick := int(ev["tick"])
+			if end_tick <= start_tick:
+				continue
+			var is_overdrive := false
+			for od_range in overdrive_ranges:
+				# Overdrive markers are authored to span whole phrases.
+				if start_tick >= int(od_range[0]) and start_tick < int(od_range[1]):
+					is_overdrive = true
+					break
+			phrases.append({
+				"start_ms": ChartParserScript.tick_to_ms(
+					start_tick, bpm_events, resolution),
+				"end_ms": ChartParserScript.tick_to_ms(
+					end_tick, bpm_events, resolution),
+				"overdrive": is_overdrive,
+			})
+	phrases.sort_custom(func(a, b): return a["start_ms"] < b["start_ms"])
+	return phrases
 
 func _extract_lyrics(track: Dictionary) -> void:
 	# Collect raw lyrics

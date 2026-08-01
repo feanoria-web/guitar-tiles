@@ -9,13 +9,13 @@ const DtaParserScript = preload("res://scripts/dta_parser.gd")
 const MoggHandlerScript = preload("res://scripts/mogg_handler.gd")
 const PlayabilityScript = preload("res://scripts/playability.gd")
 
-const BG_COLOR := UITheme.BG_BOTTOM
-const ACCENT := UITheme.NEON_CYAN
-const CARD_BG := UITheme.CARD_BG
-const CARD_SELECTED := Color(0.15, 0.22, 0.38)
-const TEXT_DIM := UITheme.TEXT_DIM
-const TEXT_BRIGHT := UITheme.TEXT_BRIGHT
-const STAR_COLOR := UITheme.NEON_GOLD
+const BG_COLOR := UITheme.ROCK_COAL
+const ACCENT := UITheme.ROCK_RED
+const CARD_BG := Color(0.065, 0.052, 0.046, 0.97)
+const CARD_SELECTED := Color(0.18, 0.075, 0.045)
+const TEXT_DIM := UITheme.ROCK_PARCHMENT
+const TEXT_BRIGHT := UITheme.ROCK_IVORY
+const STAR_COLOR := UITheme.ROCK_AMBER_HOT
 
 var card_container: VBoxContainer
 var found_songs: Array = []
@@ -26,6 +26,12 @@ const USER_SONGS_DIR := "user://songs"
 const HIDDEN_BUNDLED_SONG_PATHS := ["res://notes.chart"]
 const MIX_CACHE_DIR := "user://cache"
 const THUMB_CACHE_DIR := "user://menu_thumbnails"
+const SECRET_TAP_COUNT := 5
+const SECRET_TAP_WINDOW_MS := 1600
+const CUSTOM_HIGHWAY_MAX_BYTES := 16 * 1024 * 1024
+const CUSTOM_HIGHWAY_MAX_PIXELS := 16 * 1024 * 1024
+const CUSTOM_HIGHWAY_MAX_WIDTH := 1024
+const CUSTOM_HIGHWAY_MAX_HEIGHT := 2048
 const CHORUS_ENCORE_URL := "https://www.enchor.us/"
 const RHYTHMVERSE_URL := "https://rhythmverse.co/"
 
@@ -66,10 +72,43 @@ var _launch_approach_slider: HSlider
 var _launch_approach_label: Label
 var _launch_star_label: Label
 var _tutorial_overlay: Control = null
+var _guitar_presentation_btns: Dictionary = {}
+var _arena_fret_btns: Dictionary = {}
+var _guitar_theme_btns: Dictionary = {}
+var _arena_highway_status_label: Label = null
+var _last_tutorial_body: Label = null
+var _secret_body_label: Label = null
+var _secret_tap_count: int = 0
+var _secret_tap_deadline_ms: int = 0
+var _native_picker_context: String = ""
+var _pixel_stage_btns: Dictionary = {}
+var _stage_intensity_btns: Dictionary = {}
+var _battle_overlay: Control = null
+var _battle_mode: String = "battle"
+var _battle_status_label: Label = null
+var _battle_players_box: VBoxContainer = null
+var _battle_name_edit: LineEdit = null
+var _battle_code_edit: LineEdit = null
+var _battle_song_option: OptionButton = null
+var _battle_instrument_option: OptionButton = null
+var _battle_difficulty_option: OptionButton = null
+var _battle_preset_option: OptionButton = null
+var _battle_game_mode_option: OptionButton = null
+var _battle_transfer_label: Label = null
+var _battle_transfer_bar: ProgressBar = null
+var _battle_ready_button: Button = null
+var _battle_start_button: Button = null
+var _battle_lobby_controls: VBoxContainer = null
+var _battle_connection_panel: PanelContainer = null
+var _battle_mode_buttons: Dictionary = {}
+var _battle_rendered_song_fingerprint: String = ""
+var _battle_back_button: Button = null
+var _main_actions_container: VBoxContainer = null
 
 var _menu_loading_label: Label = null
 var _menu_loading_layer: CanvasLayer = null
 var _menu_loading_bar: ProgressBar = null
+var _song_count_label: Label = null
 var _scan_generation: int = 0
 var _ui_scale: float = 1.0
 
@@ -80,6 +119,21 @@ func _ready() -> void:
 		_ui_scale, DisplayServer.screen_get_dpi(), str(get_viewport_rect().size)])
 	_load_scores()
 	_build_ui()
+	BattleSession.set_song_catalog(found_songs)
+	if not BattleSession.state_changed.is_connected(_on_battle_state_changed):
+		BattleSession.state_changed.connect(_on_battle_state_changed)
+	if not BattleSession.lobby_changed.is_connected(_on_battle_lobby_changed):
+		BattleSession.lobby_changed.connect(_on_battle_lobby_changed)
+	if not BattleSession.session_error.is_connected(_on_battle_error):
+		BattleSession.session_error.connect(_on_battle_error)
+	if not BattleSession.song_transfer_progress_changed.is_connected(
+			_on_battle_song_transfer_progress):
+		BattleSession.song_transfer_progress_changed.connect(
+			_on_battle_song_transfer_progress)
+	if not BattleSession.song_transfer_completed.is_connected(
+			_on_battle_song_transfer_completed):
+		BattleSession.song_transfer_completed.connect(
+			_on_battle_song_transfer_completed)
 	_scan_songs()
 
 # Android phones often have much higher pixel density than tablets. Scale
@@ -102,9 +156,14 @@ func _u(value: float) -> float:
 func _fs(value: float) -> int:
 	return maxi(1, int(roundf(value * _ui_scale)))
 
+func _is_compact_layout() -> bool:
+	var viewport_size := get_viewport_rect().size
+	return viewport_size.x < 760.0 or viewport_size.y > viewport_size.x * 1.12
+
 func _section_label(text: String) -> Label:
 	var label := UITheme.section_label(text)
 	label.add_theme_font_size_override("font_size", _fs(15))
+	label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
 	return label
 
 func _set_menu_loading(on: bool, progress: float = -1.0) -> void:
@@ -127,7 +186,7 @@ func _build_menu_loading_screen() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_STOP
 	bg.theme = _create_theme()
 	_menu_loading_layer.add_child(bg)
-	UITheme.add_neon_background(bg, 2)
+	UITheme.add_hardrock_background(bg)
 
 	var vbox := VBoxContainer.new()
 	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
@@ -187,79 +246,197 @@ func _create_theme() -> Theme:
 	theme.set_font_size("font_size", "Label", _fs(19))
 	theme.set_font_size("font_size", "Button", _fs(19))
 	theme.set_font_size("font_size", "OptionButton", _fs(17))
+	var slider_fill := UITheme.glow_style(
+		Color(UITheme.ROCK_RED.r, UITheme.ROCK_RED.g, UITheme.ROCK_RED.b, 0.62),
+		UITheme.ROCK_RED, 4, 5)
+	theme.set_stylebox("grabber_area", "HSlider", slider_fill)
+	theme.set_stylebox("grabber_area_highlight", "HSlider", slider_fill)
+	var progress_fill := UITheme.glow_style(
+		Color(
+			UITheme.ROCK_STEEL_LIGHT.r,
+			UITheme.ROCK_STEEL_LIGHT.g,
+			UITheme.ROCK_STEEL_LIGHT.b,
+			0.78),
+		UITheme.ROCK_STEEL_LIGHT, 4, 5)
+	theme.set_stylebox("fill", "ProgressBar", progress_fill)
 	return theme
 
 func _build_ui() -> void:
-	UITheme.add_neon_background(self)
+	UITheme.add_hardrock_background(self)
 
 	var theme := _create_theme()
+	var compact := _is_compact_layout()
 
 	# Safe area
 	var sa := UITheme.safe_insets(self)
 
 	var root := MarginContainer.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.add_theme_constant_override("margin_left", int(sa["l"] + _u(16)))
-	root.add_theme_constant_override("margin_right", int(sa["r"] + _u(16)))
-	root.add_theme_constant_override("margin_top", int(sa["t"] + _u(12)))
-	root.add_theme_constant_override("margin_bottom", int(sa["b"] + _u(10)))
+	var side_margin := _u(8 if compact else 18)
+	root.add_theme_constant_override("margin_left", int(sa["l"] + side_margin))
+	root.add_theme_constant_override("margin_right", int(sa["r"] + side_margin))
+	root.add_theme_constant_override(
+		"margin_top", int(sa["t"] + _u(8 if compact else 12)))
+	root.add_theme_constant_override(
+		"margin_bottom", int(sa["b"] + _u(8 if compact else 12)))
 	root.theme = theme
 	add_child(root)
 
 	var main_vbox := VBoxContainer.new()
-	main_vbox.add_theme_constant_override("separation", int(_u(12)))
+	main_vbox.add_theme_constant_override("separation", int(_u(10 if compact else 14)))
 	root.add_child(main_vbox)
 
-	# --- Header: neon title + language toggle ---
+	# --- Hero masthead: crest, game identity and large utility controls ---
+	var header_panel := PanelContainer.new()
+	var header_style := UITheme.glow_style(
+		Color(0.035, 0.029, 0.026, 0.97), UITheme.ROCK_RED, 5, 8)
+	header_style.set_border_width_all(1)
+	header_style.border_color = UITheme.ROCK_STEEL
+	header_style.border_width_left = int(_u(5))
+	header_style.border_width_bottom = int(_u(5))
+	header_style.content_margin_left = _u(10 if compact else 16)
+	header_style.content_margin_right = _u(10 if compact else 16)
+	header_style.content_margin_top = _u(8 if compact else 10)
+	header_style.content_margin_bottom = _u(8 if compact else 10)
+	header_panel.add_theme_stylebox_override("panel", header_style)
+	main_vbox.add_child(header_panel)
+
 	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", int(_u(12)))
-	main_vbox.add_child(header)
+	header.custom_minimum_size = Vector2(0, _u(68 if compact else 88))
+	header.add_theme_constant_override("separation", int(_u(8 if compact else 14)))
+	header_panel.add_child(header)
+
+	header.add_child(UITheme.make_game_logo(_u(52 if compact else 78)))
+
+	var brand := VBoxContainer.new()
+	brand.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	brand.alignment = BoxContainer.ALIGNMENT_CENTER
+	brand.add_theme_constant_override("separation", int(_u(-2)))
+	brand.clip_contents = true
+	header.add_child(brand)
+
+	var brand_kicker := Label.new()
+	brand_kicker.text = I18n.t("menu_kicker")
+	brand_kicker.add_theme_font_size_override("font_size", _fs(14))
+	brand_kicker.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	brand_kicker.visible = not compact
+	if UITheme.font_bold():
+		brand_kicker.add_theme_font_override("font", UITheme.font_bold())
+	brand.add_child(brand_kicker)
 
 	var title := Label.new()
-	title.text = I18n.t("app_title")
-	title.add_theme_font_size_override("font_size", _fs(36))
-	title.add_theme_color_override("font_color", ACCENT.lightened(0.35))
-	title.add_theme_color_override("font_shadow_color", Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.55))
-	title.add_theme_constant_override("shadow_offset_x", 0)
-	title.add_theme_constant_override("shadow_offset_y", 0)
-	title.add_theme_constant_override("shadow_outline_size", int(_u(14)))
+	title.text = I18n.t("app_title").to_upper()
+	title.add_theme_font_size_override("font_size", _fs(29 if compact else 43))
+	title.add_theme_color_override("font_color", TEXT_BRIGHT)
+	title.add_theme_color_override(
+		"font_shadow_color",
+		Color(UITheme.ROCK_RED.r, UITheme.ROCK_RED.g, UITheme.ROCK_RED.b, 0.62))
+	title.add_theme_constant_override("shadow_offset_x", int(_u(2)))
+	title.add_theme_constant_override("shadow_offset_y", int(_u(3)))
+	title.add_theme_constant_override("shadow_outline_size", int(_u(7)))
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	if UITheme.font_bold():
 		title.add_theme_font_override("font", UITheme.font_bold())
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	header.add_child(title)
+	brand.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = I18n.t("menu_subtitle")
+	subtitle.add_theme_font_size_override("font_size", _fs(14))
+	subtitle.add_theme_color_override("font_color", TEXT_DIM)
+	subtitle.visible = not compact
+	brand.add_child(subtitle)
+
+	var guitar_visuals_btn := Button.new()
+	guitar_visuals_btn.text = "FX" if compact else "FX\n%s" % I18n.t("menu_visuals")
+	guitar_visuals_btn.tooltip_text = I18n.t("guitar_visuals_title")
+	UITheme.style_ghost_button(guitar_visuals_btn, _fs(20 if compact else 15))
+	guitar_visuals_btn.custom_minimum_size = Vector2(
+		_u(58 if compact else 112), _u(58 if compact else 70))
+	guitar_visuals_btn.pressed.connect(_open_guitar_visual_settings)
+	header.add_child(guitar_visuals_btn)
 
 	var help_btn := Button.new()
-	help_btn.text = "?"
+	help_btn.text = "?" if compact else "?\n%s" % I18n.t("menu_guide")
 	help_btn.tooltip_text = I18n.t("song_tutorial_title")
-	UITheme.style_ghost_button(help_btn, _fs(22))
-	help_btn.custom_minimum_size = Vector2(_u(52), _u(52))
+	UITheme.style_ghost_button(help_btn, _fs(24 if compact else 16))
+	help_btn.custom_minimum_size = Vector2(
+		_u(54 if compact else 98), _u(58 if compact else 70))
 	help_btn.pressed.connect(_open_song_tutorial)
 	header.add_child(help_btn)
 
 	var lang_btn := Button.new()
 	lang_btn.text = "TR" if Settings.language == "tr" else "EN"
+	if not compact:
+		lang_btn.text += "\n<>"
 	UITheme.style_ghost_button(lang_btn, _fs(18))
-	lang_btn.custom_minimum_size = Vector2(_u(60), _u(52))
+	lang_btn.custom_minimum_size = Vector2(
+		_u(54 if compact else 78), _u(58 if compact else 70))
 	lang_btn.pressed.connect(_on_language_toggle)
 	header.add_child(lang_btn)
 
-	# Subtle accent divider under header
-	var divider := ColorRect.new()
-	divider.color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.25)
-	divider.custom_minimum_size = Vector2(0, _u(2))
-	main_vbox.add_child(divider)
+	# Portrait: the setlist expands above a fixed action dock. Landscape: the
+	# same setlist sits beside a dedicated action rail.
+	var body: BoxContainer
+	if compact:
+		body = VBoxContainer.new()
+	else:
+		body = HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", int(_u(10 if compact else 16)))
+	main_vbox.add_child(body)
+
+	var list_column := VBoxContainer.new()
+	list_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	list_column.add_theme_constant_override("separation", int(_u(8 if compact else 12)))
+	body.add_child(list_column)
+
+	# Setlist header reads like a stamped road-case label.
+	var setlist_panel := PanelContainer.new()
+	var setlist_style := UITheme.card_style(UITheme.ROCK_RED)
+	setlist_style.bg_color = Color(0.055, 0.045, 0.040, 0.96)
+	setlist_style.border_color = UITheme.ROCK_STEEL
+	setlist_style.border_width_left = int(_u(5))
+	setlist_style.content_margin_top = _u(8)
+	setlist_style.content_margin_bottom = _u(8)
+	setlist_panel.add_theme_stylebox_override("panel", setlist_style)
+	list_column.add_child(setlist_panel)
+	var setlist_row := HBoxContainer.new()
+	setlist_panel.add_child(setlist_row)
+	var setlist_title := Label.new()
+	setlist_title.text = "♫  %s" % I18n.t("setlist_title")
+	setlist_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	setlist_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	setlist_title.add_theme_font_size_override("font_size", _fs(18 if compact else 21))
+	setlist_title.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		setlist_title.add_theme_font_override("font", UITheme.font_bold())
+	setlist_row.add_child(setlist_title)
+	_song_count_label = Label.new()
+	_song_count_label.text = I18n.t("song_count") % 0
+	_song_count_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_song_count_label.add_theme_font_size_override("font_size", _fs(14 if compact else 16))
+	_song_count_label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	setlist_row.add_child(_song_count_label)
 
 	# --- Song cards scroll area ---
 	var scroll := ScrollContainer.new()
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.scroll_deadzone = int(_u(14))
-	main_vbox.add_child(scroll)
+	list_column.add_child(scroll)
 
 	card_container = VBoxContainer.new()
 	card_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	card_container.add_theme_constant_override("separation", int(_u(16)))
+	card_container.add_theme_constant_override("separation", int(_u(10 if compact else 14)))
 	scroll.add_child(card_container)
+
+	var actions_panel := _build_main_actions_panel(compact)
+	if not compact:
+		actions_panel.custom_minimum_size = Vector2(_u(330), 0)
+		actions_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_child(actions_panel)
 
 func _on_language_toggle() -> void:
 	Settings.language = "en" if Settings.language == "tr" else "tr"
@@ -279,19 +456,22 @@ func _create_tutorial_shell(title_text: String, intro_text: String) -> Dictionar
 
 	var shade := ColorRect.new()
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	shade.color = Color(0.01, 0.005, 0.03, 0.92)
+	shade.color = Color(0.020, 0.016, 0.014, 0.97)
 	shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	_tutorial_overlay.add_child(shade)
+	UITheme.add_hardrock_background(shade)
 
 	var panel := PanelContainer.new()
-	panel.anchor_left = 0.05
-	panel.anchor_top = 0.04
-	panel.anchor_right = 0.95
-	panel.anchor_bottom = 0.96
-	var panel_style := UITheme.glow_style(UITheme.PANEL_BG, UITheme.NEON_PURPLE, 20, 12)
-	panel_style.content_margin_left = _u(18)
-	panel_style.content_margin_right = _u(18)
-	panel_style.content_margin_top = _u(18)
+	panel.anchor_left = 0.025
+	panel.anchor_top = 0.025
+	panel.anchor_right = 0.975
+	panel.anchor_bottom = 0.975
+	var panel_style := UITheme.glow_style(CARD_BG, UITheme.ROCK_RED, 5, 9)
+	panel_style.set_border_width_all(2)
+	panel_style.border_width_bottom = int(_u(5))
+	panel_style.content_margin_left = _u(22)
+	panel_style.content_margin_right = _u(22)
+	panel_style.content_margin_top = _u(16)
 	panel_style.content_margin_bottom = _u(18)
 	panel.add_theme_stylebox_override("panel", panel_style)
 	_tutorial_overlay.add_child(panel)
@@ -301,31 +481,35 @@ func _create_tutorial_shell(title_text: String, intro_text: String) -> Dictionar
 	panel.add_child(layout)
 
 	var heading_row := HBoxContainer.new()
-	heading_row.add_theme_constant_override("separation", int(_u(10)))
+	heading_row.custom_minimum_size = Vector2(0, _u(76))
+	heading_row.add_theme_constant_override("separation", int(_u(14)))
 	layout.add_child(heading_row)
+	heading_row.add_child(UITheme.make_game_logo(_u(68)))
 
 	var heading := Label.new()
-	heading.text = title_text
+	heading.text = "?  %s" % title_text.to_upper()
 	heading.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	heading.add_theme_font_size_override("font_size", _fs(28))
-	heading.add_theme_color_override("font_color", UITheme.NEON_CYAN.lightened(0.25))
+	heading.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	heading.add_theme_font_size_override("font_size", _fs(31))
+	heading.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
 	if UITheme.font_bold():
 		heading.add_theme_font_override("font", UITheme.font_bold())
 	heading_row.add_child(heading)
 
 	var close_icon := Button.new()
 	close_icon.text = "×"
-	close_icon.custom_minimum_size = Vector2(_u(48), _u(48))
-	UITheme.style_ghost_button(close_icon, _fs(24))
+	close_icon.custom_minimum_size = Vector2(_u(66), _u(66))
+	UITheme.style_ghost_button(close_icon, _fs(30))
 	close_icon.pressed.connect(_close_song_tutorial)
 	heading_row.add_child(close_icon)
 
 	var intro := Label.new()
 	intro.text = intro_text
 	intro.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	intro.add_theme_font_size_override("font_size", _fs(18))
+	intro.add_theme_font_size_override("font_size", _fs(19))
 	intro.add_theme_color_override("font_color", TEXT_DIM)
 	layout.add_child(intro)
+	UITheme.add_edge_light(layout, UITheme.ROCK_STEEL_LIGHT)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -349,7 +533,7 @@ func _open_song_tutorial() -> void:
 	var steps: VBoxContainer = shell["steps"]
 
 	_add_tutorial_step(steps, "1", I18n.t("song_tutorial_step_1"),
-		I18n.t("song_tutorial_step_1_body"), UITheme.NEON_CYAN)
+		I18n.t("song_tutorial_step_1_body"), UITheme.ROCK_RED)
 
 	var source_row := HBoxContainer.new()
 	source_row.add_theme_constant_override("separation", int(_u(10)))
@@ -368,17 +552,17 @@ func _open_song_tutorial() -> void:
 	source_row.add_child(rhythmverse_btn)
 
 	_add_tutorial_step(steps, "2", I18n.t("song_tutorial_step_2"),
-		I18n.t("song_tutorial_step_2_body"), UITheme.NEON_MAGENTA)
+		I18n.t("song_tutorial_step_2_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "3", I18n.t("song_tutorial_step_3"),
-		I18n.t("song_tutorial_step_3_body"), UITheme.NEON_PURPLE)
+		I18n.t("song_tutorial_step_3_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "4", I18n.t("song_tutorial_step_4"),
-		I18n.t("song_tutorial_step_4_body"), UITheme.NEON_GREEN)
+		I18n.t("song_tutorial_step_4_body"), UITheme.ROCK_RED)
 
 	var formats := Label.new()
 	formats.text = I18n.t("song_tutorial_formats")
 	formats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	formats.add_theme_font_size_override("font_size", _fs(16))
-	formats.add_theme_color_override("font_color", UITheme.NEON_GOLD)
+	formats.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
 	steps.add_child(formats)
 
 	var legal := Label.new()
@@ -388,7 +572,328 @@ func _open_song_tutorial() -> void:
 	legal.add_theme_color_override("font_color", UITheme.TEXT_FAINT)
 	steps.add_child(legal)
 
+	var thanks_card := _add_tutorial_step(
+		steps, "★", I18n.t("song_tutorial_thanks_title"),
+		I18n.t("song_tutorial_thanks_body"), UITheme.ROCK_PARCHMENT)
+	_arm_secret_unlock(thanks_card)
+
 	_finish_tutorial(layout)
+
+func _open_guitar_visual_settings() -> void:
+	var shell := _create_tutorial_shell(
+		I18n.t("guitar_visuals_title"), I18n.t("guitar_visuals_intro"))
+	if shell.is_empty():
+		return
+	var layout: VBoxContainer = shell["layout"]
+	var steps: VBoxContainer = shell["steps"]
+
+	_add_guitar_visual_choice(
+		steps,
+		I18n.t("guitar_presentation"),
+		["classic", "arena"],
+		[
+			I18n.t("guitar_presentation_classic"),
+			I18n.t("guitar_presentation_arena"),
+		],
+		Settings.guitar_presentation_mode,
+		_guitar_presentation_btns,
+		_on_guitar_presentation_selected,
+		UITheme.ROCK_RED)
+	_add_guitar_visual_choice(
+		steps,
+		I18n.t("arena_fret_skin"),
+		["blade", "anvil", "coil"],
+		[
+			I18n.t("arena_fret_blade"),
+			I18n.t("arena_fret_anvil"),
+			I18n.t("arena_fret_coil"),
+		],
+		Settings.arena_fret_skin,
+		_arena_fret_btns,
+		_on_arena_fret_selected,
+		UITheme.ROCK_STEEL_LIGHT)
+
+	var arena_hint := Label.new()
+	arena_hint.text = I18n.t("arena_visuals_hint")
+	arena_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	arena_hint.add_theme_font_size_override("font_size", _fs(15))
+	arena_hint.add_theme_color_override("font_color", UITheme.TEXT_FAINT)
+	steps.add_child(arena_hint)
+
+	_add_arena_highway_import_card(steps)
+
+	_add_guitar_visual_choice(
+		steps,
+		I18n.t("highway_theme"),
+		["neon", "classic", "midnight"],
+		[
+			I18n.t("highway_theme_neon"),
+			I18n.t("highway_theme_classic"),
+			I18n.t("highway_theme_midnight"),
+		],
+		Settings.guitar_highway_theme,
+		_guitar_theme_btns,
+		_on_guitar_theme_selected,
+		UITheme.ROCK_STEEL_LIGHT)
+	_add_guitar_visual_choice(
+		steps,
+		I18n.t("pixel_stage"),
+		["on", "off"],
+		[I18n.t("pixel_stage_on"), I18n.t("pixel_stage_off")],
+		"on" if Settings.pixel_stage_enabled else "off",
+		_pixel_stage_btns,
+		_on_pixel_stage_selected,
+		UITheme.ROCK_RED)
+	_add_guitar_visual_choice(
+		steps,
+		I18n.t("pixel_stage_intensity"),
+		["subtle", "live"],
+		[I18n.t("pixel_stage_subtle"), I18n.t("pixel_stage_live")],
+		Settings.pixel_stage_intensity,
+		_stage_intensity_btns,
+		_on_stage_intensity_selected,
+		UITheme.ROCK_STEEL_LIGHT)
+
+	var hint := Label.new()
+	hint.text = I18n.t("guitar_visuals_hint")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", _fs(15))
+	hint.add_theme_color_override("font_color", UITheme.TEXT_FAINT)
+	steps.add_child(hint)
+
+	_finish_tutorial(layout)
+
+func _add_arena_highway_import_card(parent: VBoxContainer) -> void:
+	var card := PanelContainer.new()
+	var card_style := UITheme.card_style(UITheme.ROCK_STEEL_LIGHT)
+	card_style.bg_color = CARD_BG
+	card.add_theme_stylebox_override("panel", card_style)
+	parent.add_child(card)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", int(_u(9)))
+	card.add_child(content)
+
+	var title := Label.new()
+	title.text = I18n.t("arena_highway_art")
+	title.add_theme_font_size_override("font_size", _fs(18))
+	title.add_theme_color_override(
+		"font_color", UITheme.ROCK_STEEL_LIGHT.lightened(0.25))
+	if UITheme.font_bold():
+		title.add_theme_font_override("font", UITheme.font_bold())
+	content.add_child(title)
+
+	_arena_highway_status_label = Label.new()
+	_arena_highway_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_arena_highway_status_label.add_theme_font_size_override(
+		"font_size", _fs(15))
+	_arena_highway_status_label.add_theme_color_override(
+		"font_color", UITheme.ROCK_PARCHMENT)
+	content.add_child(_arena_highway_status_label)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", int(_u(8)))
+	content.add_child(actions)
+
+	var import_button := Button.new()
+	import_button.text = I18n.t("arena_highway_import")
+	import_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	import_button.custom_minimum_size = Vector2(0, _u(54))
+	UITheme.style_primary_button(
+		import_button, UITheme.ROCK_STEEL_LIGHT, _fs(16))
+	import_button.pressed.connect(_on_arena_highway_import_pressed)
+	actions.add_child(import_button)
+
+	var default_button := Button.new()
+	default_button.text = I18n.t("arena_highway_use_default")
+	default_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	default_button.custom_minimum_size = Vector2(0, _u(54))
+	UITheme.style_ghost_button(default_button, _fs(16))
+	default_button.pressed.connect(_on_arena_highway_default_pressed)
+	actions.add_child(default_button)
+
+	var hint := Label.new()
+	hint.text = I18n.t("arena_highway_hint")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", _fs(14))
+	hint.add_theme_color_override("font_color", UITheme.TEXT_FAINT)
+	content.add_child(hint)
+	_refresh_arena_highway_status()
+
+func _refresh_arena_highway_status(message: String = "") -> void:
+	if not is_instance_valid(_arena_highway_status_label):
+		return
+	if not message.is_empty():
+		_arena_highway_status_label.text = message
+	elif (Settings.arena_custom_highway_enabled
+			and FileAccess.file_exists(Settings.CUSTOM_ARENA_HIGHWAY_PATH)):
+		_arena_highway_status_label.text = I18n.t(
+			"arena_highway_current_custom")
+	else:
+		_arena_highway_status_label.text = I18n.t(
+			"arena_highway_current_builtin")
+
+func _on_arena_highway_default_pressed() -> void:
+	Settings.arena_custom_highway_enabled = false
+	Settings.save_settings()
+	_refresh_arena_highway_status()
+
+func _on_arena_highway_import_pressed() -> void:
+	if OS.get_name() == "Android" and Engine.has_singleton("NativeAudioDecoder"):
+		var plugin = Engine.get_singleton("NativeAudioDecoder")
+		if not plugin.is_connected("files_picked", _on_plugin_files_picked):
+			plugin.connect("files_picked", _on_plugin_files_picked)
+		_native_picker_context = "arena_highway"
+		plugin.call("openFilePicker", I18n.t("arena_highway_picker_title"))
+		return
+
+	var filters := PackedStringArray([
+		"*.png, *.jpg, *.jpeg, *.webp ; PNG/JPG/WebP",
+	])
+	DisplayServer.file_dialog_show(
+		I18n.t("arena_highway_picker_title"),
+		"",
+		"",
+		false,
+		DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
+		filters,
+		_on_arena_highway_files_selected
+	)
+
+func _on_arena_highway_files_selected(
+		status: bool, selected: PackedStringArray, _idx: int) -> void:
+	if not status or selected.is_empty():
+		return
+	_install_arena_highway_from_selected_path(selected[0])
+
+func _install_arena_highway_from_selected_path(selected_path: String) -> void:
+	var actual_path := selected_path
+	var remove_after := false
+	if selected_path.begins_with("content://"):
+		actual_path = _resolve_content_uri(selected_path)
+		remove_after = not actual_path.is_empty()
+	elif OS.get_name() == "Android" and not FileAccess.file_exists(selected_path):
+		actual_path = _resolve_content_uri(selected_path)
+		remove_after = not actual_path.is_empty()
+
+	if actual_path.is_empty():
+		_refresh_arena_highway_status(I18n.t("arena_highway_invalid_image"))
+		return
+	var result_key := _save_custom_arena_highway(actual_path)
+	if remove_after and FileAccess.file_exists(actual_path):
+		DirAccess.remove_absolute(actual_path)
+	_refresh_arena_highway_status(I18n.t(result_key))
+
+func _save_custom_arena_highway(source_path: String) -> String:
+	var source := FileAccess.open(source_path, FileAccess.READ)
+	if source == null:
+		return "arena_highway_invalid_image"
+	var file_size := source.get_length()
+	if file_size <= 0 or file_size > CUSTOM_HIGHWAY_MAX_BYTES:
+		source.close()
+		return "arena_highway_image_too_large"
+	var bytes := source.get_buffer(file_size)
+	source.close()
+
+	var image := Image.new()
+	var error := image.load_png_from_buffer(bytes)
+	if error != OK:
+		error = image.load_jpg_from_buffer(bytes)
+	if error != OK:
+		error = image.load_webp_from_buffer(bytes)
+	if error != OK or image.is_empty():
+		return "arena_highway_invalid_image"
+
+	var width := image.get_width()
+	var height := image.get_height()
+	if width < 64 or height < 128:
+		return "arena_highway_invalid_image"
+	if width * height > CUSTOM_HIGHWAY_MAX_PIXELS:
+		return "arena_highway_image_too_large"
+
+	var fit_scale := minf(
+		1.0,
+		minf(
+			float(CUSTOM_HIGHWAY_MAX_WIDTH) / float(width),
+			float(CUSTOM_HIGHWAY_MAX_HEIGHT) / float(height)))
+	if fit_scale < 1.0:
+		image.resize(
+			maxi(1, int(round(width * fit_scale))),
+			maxi(1, int(round(height * fit_scale))),
+			Image.INTERPOLATE_LANCZOS)
+	image.convert(Image.FORMAT_RGBA8)
+
+	DirAccess.make_dir_recursive_absolute(Settings.CUSTOM_ARENA_HIGHWAY_DIR)
+	if image.save_png(Settings.CUSTOM_ARENA_HIGHWAY_PATH) != OK:
+		return "arena_highway_save_failed"
+	Settings.arena_custom_highway_enabled = true
+	Settings.save_settings()
+	return "arena_highway_import_success"
+
+func _add_guitar_visual_choice(parent: VBoxContainer, title: String,
+		keys: Array, labels: Array, selected_key: String, button_map: Dictionary,
+		callback: Callable, accent: Color) -> void:
+	var card := PanelContainer.new()
+	var card_style := UITheme.card_style(accent)
+	card_style.bg_color = CARD_BG
+	card.add_theme_stylebox_override("panel", card_style)
+	parent.add_child(card)
+
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", int(_u(9)))
+	card.add_child(content)
+
+	var title_label := Label.new()
+	title_label.text = title
+	title_label.add_theme_font_size_override("font_size", _fs(18))
+	title_label.add_theme_color_override("font_color", accent.lightened(0.25))
+	if UITheme.font_bold():
+		title_label.add_theme_font_override("font", UITheme.font_bold())
+	content.add_child(title_label)
+
+	var choices := HBoxContainer.new()
+	choices.add_theme_constant_override("separation", int(_u(8)))
+	content.add_child(choices)
+
+	button_map.clear()
+	for index in range(keys.size()):
+		var key := String(keys[index])
+		var button := Button.new()
+		button.text = String(labels[index])
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.custom_minimum_size = Vector2(0, _u(54))
+		button.add_theme_font_size_override("font_size", _fs(16))
+		UITheme.style_chip_button(button, key == selected_key, accent)
+		button.pressed.connect(callback.bind(key))
+		choices.add_child(button)
+		button_map[key] = button
+
+func _on_guitar_presentation_selected(presentation_key: String) -> void:
+	Settings.guitar_presentation_mode = presentation_key
+	Settings.save_settings()
+	_restyle_chip_group(
+		_guitar_presentation_btns, presentation_key, UITheme.ROCK_RED)
+
+func _on_arena_fret_selected(fret_key: String) -> void:
+	Settings.arena_fret_skin = fret_key
+	Settings.save_settings()
+	_restyle_chip_group(
+		_arena_fret_btns, fret_key, UITheme.ROCK_STEEL_LIGHT)
+
+func _on_guitar_theme_selected(theme_key: String) -> void:
+	Settings.guitar_highway_theme = theme_key
+	Settings.save_settings()
+	_restyle_chip_group(_guitar_theme_btns, theme_key, UITheme.ROCK_STEEL_LIGHT)
+
+func _on_pixel_stage_selected(stage_mode: String) -> void:
+	Settings.pixel_stage_enabled = stage_mode == "on"
+	Settings.save_settings()
+	_restyle_chip_group(_pixel_stage_btns, stage_mode, UITheme.ROCK_RED)
+
+func _on_stage_intensity_selected(intensity: String) -> void:
+	Settings.pixel_stage_intensity = intensity
+	Settings.save_settings()
+	_restyle_chip_group(_stage_intensity_btns, intensity, UITheme.ROCK_STEEL_LIGHT)
 
 func _open_game_settings_tutorial() -> void:
 	var shell := _create_tutorial_shell(
@@ -399,21 +904,21 @@ func _open_game_settings_tutorial() -> void:
 	var steps: VBoxContainer = shell["steps"]
 
 	_add_tutorial_step(steps, "1", I18n.t("settings_help_track"),
-		I18n.t("settings_help_track_body"), UITheme.NEON_CYAN)
+		I18n.t("settings_help_track_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "2", I18n.t("settings_help_gameplay"),
-		I18n.t("settings_help_gameplay_body"), UITheme.NEON_MAGENTA)
+		I18n.t("settings_help_gameplay_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "3", I18n.t("settings_help_mode"),
-		I18n.t("settings_help_mode_body"), UITheme.NEON_PURPLE)
+		I18n.t("settings_help_mode_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "4", I18n.t("settings_help_view"),
-		I18n.t("settings_help_view_body"), UITheme.NEON_GREEN)
+		I18n.t("settings_help_view_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "5", I18n.t("settings_help_vfx"),
-		I18n.t("settings_help_vfx_body"), UITheme.NEON_GOLD)
+		I18n.t("settings_help_vfx_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "6", I18n.t("settings_help_rock"),
-		I18n.t("settings_help_rock_body"), UITheme.NEON_RED)
+		I18n.t("settings_help_rock_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "7", I18n.t("settings_help_audio"),
-		I18n.t("settings_help_audio_body"), UITheme.NEON_CYAN)
+		I18n.t("settings_help_audio_body"), UITheme.ROCK_RED)
 	_add_tutorial_step(steps, "8", I18n.t("settings_help_speed"),
-		I18n.t("settings_help_speed_body"), UITheme.NEON_PURPLE)
+		I18n.t("settings_help_speed_body"), UITheme.ROCK_RED)
 
 	_finish_tutorial(layout)
 
@@ -421,7 +926,7 @@ func _finish_tutorial(layout: VBoxContainer) -> void:
 	var done_btn := Button.new()
 	done_btn.text = I18n.t("song_tutorial_close")
 	done_btn.custom_minimum_size = Vector2(0, _u(58))
-	UITheme.style_primary_button(done_btn, UITheme.NEON_CYAN, _fs(19))
+	UITheme.style_primary_button(done_btn, UITheme.ROCK_RED, _fs(19))
 	done_btn.pressed.connect(_close_song_tutorial)
 	layout.add_child(done_btn)
 
@@ -430,18 +935,41 @@ func _finish_tutorial(layout: VBoxContainer) -> void:
 	tween.tween_property(_tutorial_overlay, "modulate:a", 1.0, 0.18)
 
 func _add_tutorial_step(parent: VBoxContainer, number: String, title: String,
-		body: String, accent: Color) -> void:
+		body: String, accent: Color) -> PanelContainer:
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UITheme.card_style(accent))
+	var card_style := UITheme.card_style(accent)
+	card_style.bg_color = CARD_BG
+	card.add_theme_stylebox_override("panel", card_style)
 	parent.add_child(card)
 
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", int(_u(14)))
+	card.add_child(row)
+
+	var number_badge := PanelContainer.new()
+	number_badge.custom_minimum_size = Vector2(_u(62), _u(62))
+	number_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	number_badge.add_theme_stylebox_override("panel", UITheme.badge_style(accent, true))
+	row.add_child(number_badge)
+	var number_label := Label.new()
+	number_label.text = number
+	number_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	number_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	number_label.add_theme_font_size_override("font_size", _fs(26))
+	number_label.add_theme_color_override("font_color", accent.lightened(0.28))
+	if UITheme.font_bold():
+		number_label.add_theme_font_override("font", UITheme.font_bold())
+	number_badge.add_child(number_label)
+
 	var content := VBoxContainer.new()
-	content.add_theme_constant_override("separation", int(_u(5)))
-	card.add_child(content)
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.alignment = BoxContainer.ALIGNMENT_CENTER
+	content.add_theme_constant_override("separation", int(_u(6)))
+	row.add_child(content)
 
 	var step_title := Label.new()
-	step_title.text = "%s  %s" % [number, title]
-	step_title.add_theme_font_size_override("font_size", _fs(19))
+	step_title.text = title.to_upper()
+	step_title.add_theme_font_size_override("font_size", _fs(20))
 	step_title.add_theme_color_override("font_color", accent.lightened(0.25))
 	if UITheme.font_bold():
 		step_title.add_theme_font_override("font", UITheme.font_bold())
@@ -453,6 +981,49 @@ func _add_tutorial_step(parent: VBoxContainer, number: String, title: String,
 	step_body.add_theme_font_size_override("font_size", _fs(16))
 	step_body.add_theme_color_override("font_color", TEXT_DIM)
 	content.add_child(step_body)
+	_last_tutorial_body = step_body
+	return card
+
+# Hidden unlock: five taps on the tester-thanks card toggle unlimited overdrive.
+# The card stays MOUSE_FILTER_PASS so the event still reaches the scroll
+# container — anything else breaks touch scrolling on this panel.
+func _arm_secret_unlock(card: PanelContainer) -> void:
+	if not is_instance_valid(card):
+		return
+	_secret_body_label = _last_tutorial_body
+	card.mouse_filter = Control.MOUSE_FILTER_PASS
+	for child in card.find_children("", "Control", true, false):
+		(child as Control).mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.gui_input.connect(_on_secret_card_input)
+
+func _on_secret_card_input(event: InputEvent) -> void:
+	var pressed := false
+	if event is InputEventMouseButton:
+		pressed = (event as InputEventMouseButton).pressed \
+			and (event as InputEventMouseButton).button_index == MOUSE_BUTTON_LEFT
+	elif event is InputEventScreenTouch:
+		pressed = (event as InputEventScreenTouch).pressed
+	if not pressed:
+		return
+	var now := Time.get_ticks_msec()
+	# Taps have to be deliberate and consecutive, so a slow scroll that happens
+	# to start on this card never trips it.
+	if now > _secret_tap_deadline_ms:
+		_secret_tap_count = 0
+	_secret_tap_count += 1
+	_secret_tap_deadline_ms = now + SECRET_TAP_WINDOW_MS
+	if _secret_tap_count < SECRET_TAP_COUNT:
+		return
+	_secret_tap_count = 0
+	Settings.unlimited_overdrive = not Settings.unlimited_overdrive
+	Settings.save_settings()
+	if is_instance_valid(_secret_body_label):
+		_secret_body_label.text = I18n.t(
+			"secret_overdrive_on" if Settings.unlimited_overdrive
+			else "secret_overdrive_off")
+		_secret_body_label.add_theme_color_override(
+			"font_color",
+			UITheme.NEON_CYAN if Settings.unlimited_overdrive else TEXT_DIM)
 
 func _close_song_tutorial() -> void:
 	if not is_instance_valid(_tutorial_overlay):
@@ -487,44 +1058,80 @@ func _parse_song_name(display: String) -> Dictionary:
 		return {"artist": folder, "title": fname}
 	return {"artist": "", "title": name}
 
-# Neon accents cycled across song cards
-const CARD_ACCENTS := [UITheme.NEON_CYAN, UITheme.NEON_MAGENTA, UITheme.NEON_PURPLE, UITheme.NEON_GREEN]
-
 func _create_song_card(index: int, song: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
 	var parsed := _parse_song_name(song["display_name"])
-	var accent: Color = CARD_ACCENTS[index % CARD_ACCENTS.size()]
+	var compact := _is_compact_layout()
+	var accent := UITheme.ROCK_RED
 
-	# Magic Tiles style: oversized artwork-first card with a large touch target.
+	# One coherent material language across the setlist. Album art supplies the
+	# natural color variation instead of cycling synthetic accent colors.
 	var card_style := UITheme.card_style(accent)
-	card_style.bg_color = UITheme.CARD_BG.lerp(accent, 0.09)
-	card_style.set_corner_radius_all(int(_u(22)))
+	card_style.bg_color = Color(0.045, 0.037, 0.033, 0.97)
+	card_style.set_corner_radius_all(int(_u(4)))
+	card_style.border_color = UITheme.ROCK_STEEL
 	card_style.border_width_left = int(_u(6))
-	card_style.content_margin_left = _u(16); card_style.content_margin_right = _u(18)
-	card_style.content_margin_top = _u(14); card_style.content_margin_bottom = _u(14)
+	card_style.border_width_bottom = int(_u(4))
+	card_style.shadow_color = Color(0, 0, 0, 0.76)
+	card_style.shadow_size = int(_u(7))
+	card_style.content_margin_left = _u(9 if compact else 12)
+	card_style.content_margin_right = _u(10 if compact else 18)
+	card_style.content_margin_top = _u(9 if compact else 12)
+	card_style.content_margin_bottom = _u(9 if compact else 12)
 	panel.add_theme_stylebox_override("panel", card_style)
-	panel.custom_minimum_size = Vector2(0, _u(176))
+	panel.custom_minimum_size = Vector2(0, _u(166 if compact else 188))
 
 	var hbox := HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", int(_u(18)))
+	hbox.add_theme_constant_override("separation", int(_u(9 if compact else 14)))
 	hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(hbox)
 
+	var track_plate := PanelContainer.new()
+	var track_style := UITheme.badge_style(accent, true)
+	track_style.bg_color = Color(0.13, 0.045, 0.032, 0.94)
+	track_style.border_color = accent.darkened(0.08)
+	track_plate.add_theme_stylebox_override("panel", track_style)
+	track_plate.custom_minimum_size = Vector2(
+		_u(58 if compact else 70), _u(142 if compact else 156))
+	track_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hbox.add_child(track_plate)
+	var track_box := VBoxContainer.new()
+	track_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	track_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	track_plate.add_child(track_box)
+	var track_caption := Label.new()
+	track_caption.text = I18n.t("track_number")
+	track_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	track_caption.add_theme_font_size_override("font_size", _fs(11))
+	track_caption.add_theme_color_override("font_color", TEXT_DIM)
+	track_box.add_child(track_caption)
+	var track_number := Label.new()
+	track_number.text = "%02d" % (index + 1)
+	track_number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	track_number.add_theme_font_size_override("font_size", _fs(25 if compact else 30))
+	track_number.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		track_number.add_theme_font_override("font", UITheme.font_bold())
+	track_box.add_child(track_number)
+
 	# Album art thumbnail (placeholder now, lazy-loaded after scan)
 	var thumb := PanelContainer.new()
-	var thumb_style := UITheme.glow_style(Color(0.14, 0.13, 0.24), accent, int(_u(16)), int(_u(7)))
+	var thumb_style := UITheme.glow_style(
+		Color(0.025, 0.022, 0.020), UITheme.ROCK_STEEL, 4, 7)
+	thumb_style.set_border_width_all(2)
 	thumb_style.content_margin_left = 0; thumb_style.content_margin_right = 0
 	thumb_style.content_margin_top = 0; thumb_style.content_margin_bottom = 0
 	thumb.add_theme_stylebox_override("panel", thumb_style)
-	thumb.custom_minimum_size = Vector2(_u(144), _u(144))
+	var thumb_size := _u(142 if compact else 156)
+	thumb.custom_minimum_size = Vector2(thumb_size, thumb_size)
 	thumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(thumb)
 
 	var thumb_icon := Label.new()
 	thumb_icon.text = "♪"
-	thumb_icon.add_theme_font_size_override("font_size", _fs(58))
-	thumb_icon.add_theme_color_override("font_color", Color(accent.r, accent.g, accent.b, 0.5))
+	thumb_icon.add_theme_font_size_override("font_size", _fs(48 if compact else 58))
+	thumb_icon.add_theme_color_override("font_color", UITheme.ROCK_STEEL_LIGHT)
 	thumb_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	thumb_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	thumb.add_child(thumb_icon)
@@ -533,13 +1140,21 @@ func _create_song_card(index: int, song: Dictionary) -> PanelContainer:
 	var text_vbox := VBoxContainer.new()
 	text_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	text_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	text_vbox.add_theme_constant_override("separation", int(_u(7)))
+	text_vbox.add_theme_constant_override("separation", int(_u(5 if compact else 8)))
 	text_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	hbox.add_child(text_vbox)
 
+	var status_lbl := Label.new()
+	status_lbl.text = "◆  %s" % I18n.t("tap_to_play")
+	status_lbl.add_theme_font_size_override("font_size", _fs(11 if compact else 13))
+	status_lbl.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	if UITheme.font_bold():
+		status_lbl.add_theme_font_override("font", UITheme.font_bold())
+	text_vbox.add_child(status_lbl)
+
 	var title_lbl := Label.new()
 	title_lbl.text = parsed["title"]
-	title_lbl.add_theme_font_size_override("font_size", _fs(30))
+	title_lbl.add_theme_font_size_override("font_size", _fs(24 if compact else 31))
 	title_lbl.add_theme_color_override("font_color", TEXT_BRIGHT)
 	title_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	if UITheme.font_bold():
@@ -549,7 +1164,7 @@ func _create_song_card(index: int, song: Dictionary) -> PanelContainer:
 	if parsed["artist"] != "":
 		var artist_lbl := Label.new()
 		artist_lbl.text = parsed["artist"]
-		artist_lbl.add_theme_font_size_override("font_size", _fs(20))
+		artist_lbl.add_theme_font_size_override("font_size", _fs(17 if compact else 20))
 		artist_lbl.add_theme_color_override("font_color", TEXT_DIM)
 		artist_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		text_vbox.add_child(artist_lbl)
@@ -570,17 +1185,26 @@ func _create_song_card(index: int, song: Dictionary) -> PanelContainer:
 		stars_lbl.add_theme_constant_override("shadow_outline_size", int(_u(6)))
 		text_vbox.add_child(stars_lbl)
 
-	# Play button circle — Magic Tiles style
+	# Heavy launch plate; no colored halo.
+	var play_badge := PanelContainer.new()
+	play_badge.custom_minimum_size = Vector2(
+		_u(66 if compact else 78), _u(66 if compact else 78))
+	play_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	play_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	play_badge.add_theme_stylebox_override("panel", UITheme.badge_style(accent, true))
+	hbox.add_child(play_badge)
 	var play_circle := Label.new()
 	play_circle.text = "▶"
-	play_circle.add_theme_font_size_override("font_size", _fs(36))
-	play_circle.add_theme_color_override("font_color", accent.lightened(0.25))
-	play_circle.add_theme_color_override("font_shadow_color", Color(accent.r, accent.g, accent.b, 0.45))
-	play_circle.add_theme_constant_override("shadow_offset_x", 0)
-	play_circle.add_theme_constant_override("shadow_offset_y", 0)
-	play_circle.add_theme_constant_override("shadow_outline_size", int(_u(12)))
+	play_circle.add_theme_font_size_override("font_size", _fs(30 if compact else 34))
+	play_circle.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	play_circle.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.72))
+	play_circle.add_theme_constant_override("shadow_offset_x", int(_u(2)))
+	play_circle.add_theme_constant_override("shadow_offset_y", int(_u(3)))
+	play_circle.add_theme_constant_override("shadow_outline_size", int(_u(4)))
+	play_circle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	play_circle.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	hbox.add_child(play_circle)
+	play_circle.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	play_badge.add_child(play_circle)
 
 	# PASS (not STOP): the card still gets gui_input for tap detection, but the
 	# ScrollContainer above also sees the drag — otherwise scrolling breaks.
@@ -727,6 +1351,8 @@ func _scan_songs(force_rescan: bool = false) -> void:
 func _build_song_cards(gen: int, show_loading: bool) -> void:
 	if gen != _scan_generation or not is_inside_tree():
 		return
+	if is_instance_valid(_song_count_label):
+		_song_count_label.text = I18n.t("song_count") % found_songs.size()
 
 	# Build cards in batches of 8 — keeps every frame under budget
 	for i in range(found_songs.size()):
@@ -750,8 +1376,7 @@ func _build_song_cards(gen: int, show_loading: bool) -> void:
 		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
 		card_container.add_child(empty_lbl)
 
-	# Import button at end of list
-	_add_import_button()
+	BattleSession.set_song_catalog(found_songs)
 
 	if show_loading:
 		await _start_art_queue(true)
@@ -794,17 +1419,60 @@ func _scan_subdir(parent_dir: String, folder_name: String) -> void:
 		sub_fname = sub_dir.get_next()
 	sub_dir.list_dir_end()
 
-func _add_import_button() -> void:
-	var spacer := Control.new()
-	spacer.custom_minimum_size = Vector2(0, _u(10))
-	card_container.add_child(spacer)
+func _build_main_actions_panel(compact: bool) -> PanelContainer:
+	var actions_panel := PanelContainer.new()
+	var actions_style := UITheme.glow_style(
+		Color(0.042, 0.034, 0.030, 0.98), UITheme.ROCK_STEEL, 5, 8)
+	actions_style.border_color = UITheme.ROCK_STEEL
+	actions_style.border_width_top = int(_u(4 if compact else 1))
+	actions_style.border_width_left = int(_u(5))
+	actions_style.content_margin_left = _u(10 if compact else 16)
+	actions_style.content_margin_right = _u(10 if compact else 16)
+	actions_style.content_margin_top = _u(9 if compact else 16)
+	actions_style.content_margin_bottom = _u(9 if compact else 16)
+	actions_panel.add_theme_stylebox_override("panel", actions_style)
+	actions_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", int(_u(7 if compact else 14)))
+	actions_panel.add_child(actions)
+	_main_actions_container = actions
+	var actions_title := Label.new()
+	actions_title.text = "//  %s" % I18n.t("main_actions").to_upper()
+	actions_title.add_theme_font_size_override("font_size", _fs(15 if compact else 19))
+	actions_title.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		actions_title.add_theme_font_override("font", UITheme.font_bold())
+	actions.add_child(actions_title)
+
+	var action_grid := GridContainer.new()
+	action_grid.columns = 2 if compact else 1
+	action_grid.add_theme_constant_override("h_separation", int(_u(10)))
+	action_grid.add_theme_constant_override("v_separation", int(_u(12)))
+	actions.add_child(action_grid)
 
 	var import_btn := Button.new()
-	import_btn.text = I18n.t("add_song")
-	UITheme.style_primary_button(import_btn, UITheme.NEON_PURPLE, _fs(23))
-	import_btn.custom_minimum_size = Vector2(0, _u(68))
+	import_btn.text = "+\n%s" % I18n.t("add_song").trim_prefix("+").strip_edges().to_upper()
+	import_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.style_primary_button(import_btn, UITheme.ROCK_STEEL_LIGHT, _fs(20 if compact else 25))
+	import_btn.custom_minimum_size = Vector2(0, _u(88 if compact else 132))
 	import_btn.pressed.connect(_on_import_pressed)
-	card_container.add_child(import_btn)
+	action_grid.add_child(import_btn)
+
+	var battle_btn := Button.new()
+	battle_btn.text = "VS\n%s" % I18n.t("battle_menu_button").to_upper()
+	battle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.style_primary_button(battle_btn, UITheme.ROCK_RED, _fs(20 if compact else 25))
+	battle_btn.custom_minimum_size = Vector2(0, _u(88 if compact else 132))
+	battle_btn.pressed.connect(_open_battle_menu)
+	action_grid.add_child(battle_btn)
+
+	var battle_hint := Label.new()
+	battle_hint.text = I18n.t("battle_menu_hint")
+	battle_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	battle_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	battle_hint.add_theme_font_size_override("font_size", _fs(13 if compact else 16))
+	battle_hint.add_theme_color_override("font_color", TEXT_DIM)
+	actions.add_child(battle_hint)
 
 	# Status label (hidden by default)
 	_import_status_label = Label.new()
@@ -813,8 +1481,782 @@ func _add_import_button() -> void:
 	_import_status_label.add_theme_color_override("font_color", ACCENT)
 	_import_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_import_status_label.visible = false
-	card_container.add_child(_import_status_label)
+	actions.add_child(_import_status_label)
+	return actions_panel
 
+func _open_battle_menu() -> void:
+	if is_instance_valid(_battle_overlay):
+		return
+	var compact := _is_compact_layout()
+	_battle_mode = BattleSession.room_mode if BattleSession.session_state == "lobby" else "battle"
+	_battle_overlay = Control.new()
+	_battle_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_battle_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_battle_overlay.z_index = 120
+	_battle_overlay.theme = _create_theme()
+	add_child(_battle_overlay)
+
+	var shade := ColorRect.new()
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shade.color = Color(0.020, 0.016, 0.014, 0.965)
+	shade.mouse_filter = Control.MOUSE_FILTER_STOP
+	_battle_overlay.add_child(shade)
+	UITheme.add_hardrock_background(shade)
+
+	var sa := UITheme.safe_insets(self)
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override(
+		"margin_left", int(sa["l"] + _u(8 if compact else 14)))
+	margin.add_theme_constant_override(
+		"margin_right", int(sa["r"] + _u(8 if compact else 14)))
+	margin.add_theme_constant_override(
+		"margin_top", int(sa["t"] + _u(8 if compact else 10)))
+	margin.add_theme_constant_override(
+		"margin_bottom", int(sa["b"] + _u(8 if compact else 10)))
+	_battle_overlay.add_child(margin)
+
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", int(_u(10)))
+	margin.add_child(layout)
+
+	var header := HBoxContainer.new()
+	header.custom_minimum_size = Vector2(0, _u(104 if compact else 78))
+	header.add_theme_constant_override("separation", int(_u(8 if compact else 12)))
+	layout.add_child(header)
+
+	# Keep navigation in the phone's safe top-left corner. The old trailing X
+	# could sit directly under OEM game/FPS overlays at the top-right.
+	_battle_back_button = Button.new()
+	_battle_back_button.name = "BattleBackButton"
+	_battle_back_button.text = "‹  %s" % I18n.t("back").to_upper()
+	_battle_back_button.custom_minimum_size = Vector2(
+		_u(168 if compact else 142), _u(104 if compact else 72))
+	UITheme.style_primary_button(
+		_battle_back_button, UITheme.ROCK_RED, _fs(18 if compact else 20))
+	_battle_back_button.pressed.connect(_close_battle_menu)
+	header.add_child(_battle_back_button)
+
+	header.add_child(UITheme.make_game_logo(_u(72 if compact else 68)))
+	var title := Label.new()
+	title.text = I18n.t("battle_title").to_upper()
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", _fs(27 if compact else 36))
+	title.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	if UITheme.font_bold():
+		title.add_theme_font_override("font", UITheme.font_bold())
+	header.add_child(title)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	layout.add_child(scroll)
+	var content := VBoxContainer.new()
+	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.add_theme_constant_override("separation", int(_u(16)))
+	scroll.add_child(content)
+
+	_battle_connection_panel = PanelContainer.new()
+	_battle_connection_panel.add_theme_stylebox_override(
+		"panel", UITheme.glow_style(CARD_BG, UITheme.ROCK_STEEL, 5, 8))
+	_battle_connection_panel.visible = BattleSession.session_state != "lobby"
+	content.add_child(_battle_connection_panel)
+	var connection_box := VBoxContainer.new()
+	connection_box.add_theme_constant_override("separation", int(_u(16)))
+	_battle_connection_panel.add_child(connection_box)
+
+	var intro := HBoxContainer.new()
+	intro.add_theme_constant_override("separation", int(_u(16)))
+	connection_box.add_child(intro)
+	intro.add_child(_battle_icon_badge("2–4", UITheme.ROCK_STEEL_LIGHT, 100))
+	var intro_text := VBoxContainer.new()
+	intro_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	intro_text.alignment = BoxContainer.ALIGNMENT_CENTER
+	intro.add_child(intro_text)
+	var intro_title := Label.new()
+	intro_title.text = I18n.t("online_choose_mode")
+	intro_title.add_theme_font_size_override("font_size", _fs(28))
+	intro_title.add_theme_color_override("font_color", TEXT_BRIGHT)
+	if UITheme.font_bold():
+		intro_title.add_theme_font_override("font", UITheme.font_bold())
+	intro_text.add_child(intro_title)
+	var intro_hint := Label.new()
+	intro_hint.text = I18n.t("battle_menu_hint")
+	intro_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	intro_hint.add_theme_font_size_override("font_size", _fs(18))
+	intro_hint.add_theme_color_override("font_color", TEXT_DIM)
+	intro_text.add_child(intro_hint)
+
+	var mode_cards := HBoxContainer.new()
+	mode_cards.add_theme_constant_override("separation", int(_u(14)))
+	connection_box.add_child(mode_cards)
+	_battle_mode_buttons.clear()
+	for data in [
+		["battle", "VS", I18n.t("battle_mode"), I18n.t("battle_mode_short"), UITheme.ROCK_RED],
+		["band", "BAND", I18n.t("band_mode"), I18n.t("band_mode_short"), UITheme.ROCK_STEEL_LIGHT],
+	]:
+		var button := _make_battle_mode_card(
+			String(data[0]), String(data[1]), String(data[2]),
+			String(data[3]), data[4])
+		button.button_pressed = String(data[0]) == _battle_mode
+		_style_battle_mode_card(button, button.button_pressed)
+		button.pressed.connect(_on_battle_mode_selected.bind(String(data[0])))
+		mode_cards.add_child(button)
+		_battle_mode_buttons[String(data[0])] = button
+
+	var mode_help := Label.new()
+	mode_help.name = "ModeHelp"
+	mode_help.text = _battle_mode_help()
+	mode_help.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mode_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	mode_help.add_theme_color_override("font_color", TEXT_DIM)
+	mode_help.add_theme_font_size_override("font_size", _fs(18))
+	connection_box.add_child(mode_help)
+
+	connection_box.add_child(_battle_field_label(I18n.t("player_name")))
+	_battle_name_edit = LineEdit.new()
+	_battle_name_edit.placeholder_text = I18n.t("player_name")
+	_battle_name_edit.text = I18n.t("default_player_name")
+	_battle_name_edit.max_length = 18
+	_battle_name_edit.custom_minimum_size = Vector2(0, _u(76))
+	_battle_name_edit.add_theme_font_size_override("font_size", _fs(25))
+	connection_box.add_child(_battle_name_edit)
+
+	connection_box.add_child(_battle_field_label(I18n.t("room_code")))
+	var join_row := HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", int(_u(12)))
+	connection_box.add_child(join_row)
+	_battle_code_edit = LineEdit.new()
+	_battle_code_edit.placeholder_text = "ABC123"
+	_battle_code_edit.max_length = 6
+	_battle_code_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_battle_code_edit.custom_minimum_size = Vector2(0, _u(82))
+	_battle_code_edit.add_theme_font_size_override("font_size", _fs(30))
+	_battle_code_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	join_row.add_child(_battle_code_edit)
+	var join_btn := Button.new()
+	join_btn.text = "→  %s" % I18n.t("join_room")
+	join_btn.custom_minimum_size = Vector2(_u(230), _u(82))
+	UITheme.style_primary_button(join_btn, UITheme.ROCK_READY, _fs(25))
+	join_btn.pressed.connect(_on_battle_join)
+	join_row.add_child(join_btn)
+	var create_btn := Button.new()
+	create_btn.text = "+  %s" % I18n.t("create_room")
+	create_btn.custom_minimum_size = Vector2(0, _u(92))
+	UITheme.style_primary_button(create_btn, UITheme.ROCK_RED, _fs(27))
+	create_btn.pressed.connect(_on_battle_create)
+	connection_box.add_child(create_btn)
+
+	_battle_status_label = Label.new()
+	_battle_status_label.text = I18n.t("multiplayer_not_configured") \
+		if not BattleSession.configured else I18n.t("multiplayer_ready")
+	_battle_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_battle_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_battle_status_label.add_theme_font_size_override("font_size", _fs(19))
+	_battle_status_label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	_battle_status_label.visible = BattleSession.session_state != "lobby"
+	content.add_child(_battle_status_label)
+
+	_battle_lobby_controls = VBoxContainer.new()
+	_battle_lobby_controls.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_battle_lobby_controls.add_theme_constant_override("separation", int(_u(16)))
+	content.add_child(_battle_lobby_controls)
+	_build_battle_lobby_controls()
+	if BattleSession.session_state == "lobby":
+		_on_battle_lobby_changed(BattleSession._players_array(), BattleSession.room_data)
+func _build_battle_lobby_controls() -> void:
+	if not is_instance_valid(_battle_lobby_controls):
+		return
+	for child in _battle_lobby_controls.get_children():
+		child.queue_free()
+	if BattleSession.session_state != "lobby":
+		_battle_rendered_song_fingerprint = ""
+		return
+	_battle_rendered_song_fingerprint = _battle_song_render_key()
+
+	var room_panel := PanelContainer.new()
+	room_panel.custom_minimum_size = Vector2(0, _u(112))
+	room_panel.add_theme_stylebox_override(
+		"panel", UITheme.glow_style(CARD_BG, UITheme.ROCK_PARCHMENT, 5, 8))
+	_battle_lobby_controls.add_child(room_panel)
+	var room_row := HBoxContainer.new()
+	room_row.add_theme_constant_override("separation", int(_u(18)))
+	room_panel.add_child(room_row)
+	room_row.add_child(_battle_icon_badge("#", UITheme.ROCK_PARCHMENT, 84))
+	var room_text := VBoxContainer.new()
+	room_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	room_text.alignment = BoxContainer.ALIGNMENT_CENTER
+	room_row.add_child(room_text)
+	var room_caption := Label.new()
+	room_caption.text = I18n.t("room_code").to_upper()
+	room_caption.add_theme_font_size_override("font_size", _fs(18))
+	room_caption.add_theme_color_override("font_color", TEXT_DIM)
+	room_text.add_child(room_caption)
+	var code := Label.new()
+	code.text = BattleSession.room_code
+	code.add_theme_font_size_override("font_size", _fs(42))
+	code.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		code.add_theme_font_override("font", UITheme.font_bold())
+	room_text.add_child(code)
+
+	_battle_lobby_controls.add_child(
+		_battle_section_title("2–4", I18n.t("multiplayer_players"), UITheme.ROCK_READY))
+	_battle_players_box = VBoxContainer.new()
+	_battle_players_box.add_theme_constant_override("separation", int(_u(10)))
+	_battle_lobby_controls.add_child(_battle_players_box)
+
+	var song_panel := PanelContainer.new()
+	song_panel.add_theme_stylebox_override(
+		"panel", UITheme.glow_style(CARD_BG, UITheme.ROCK_STEEL_LIGHT, 5, 8))
+	_battle_lobby_controls.add_child(song_panel)
+	var song_box := VBoxContainer.new()
+	song_box.add_theme_constant_override("separation", int(_u(12)))
+	song_panel.add_child(song_box)
+	song_box.add_child(
+		_battle_section_title("♫", I18n.t("multiplayer_song"), UITheme.ROCK_STEEL_LIGHT))
+	if BattleSession.is_host:
+		_battle_song_option = OptionButton.new()
+		_battle_song_option.custom_minimum_size = Vector2(0, _u(82))
+		_battle_song_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_battle_song_option.add_item("+  %s" % I18n.t("choose_song"))
+		for song in found_songs:
+			_battle_song_option.add_item("♫  %s" % String(
+				song.get("display_name", I18n.t("default_song_name"))))
+		_style_battle_option(_battle_song_option)
+		_battle_song_option.item_selected.connect(_on_battle_song_selected)
+		song_box.add_child(_battle_song_option)
+		var selected_name := String(BattleSession.selected_song.get("name", ""))
+		if not selected_name.is_empty():
+			for song_index in range(found_songs.size()):
+				if String(found_songs[song_index].get("display_name", "")) == selected_name:
+					_battle_song_option.select(song_index + 1)
+					break
+	elif not BattleSession.selected_song.is_empty():
+		var song_name := Label.new()
+		song_name.text = "♫  %s" % String(BattleSession.selected_song.get("name", ""))
+		song_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		song_name.add_theme_font_size_override("font_size", _fs(27))
+		song_name.add_theme_color_override("font_color", TEXT_BRIGHT)
+		song_box.add_child(song_name)
+	else:
+		var waiting_song := Label.new()
+		waiting_song.text = I18n.t("multiplayer_waiting_song")
+		waiting_song.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		waiting_song.add_theme_font_size_override("font_size", _fs(20))
+		waiting_song.add_theme_color_override("font_color", TEXT_DIM)
+		song_box.add_child(waiting_song)
+
+	_build_battle_host_options(song_box)
+
+	_battle_transfer_label = Label.new()
+	_battle_transfer_label.visible = not BattleSession.song_transfer_detail.is_empty()
+	_battle_transfer_label.text = BattleSession.song_transfer_detail
+	_battle_transfer_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_battle_transfer_label.add_theme_font_size_override("font_size", _fs(19))
+	_battle_transfer_label.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	song_box.add_child(_battle_transfer_label)
+	_battle_transfer_bar = ProgressBar.new()
+	_battle_transfer_bar.visible = BattleSession.song_transfer_active
+	_battle_transfer_bar.show_percentage = true
+	_battle_transfer_bar.value = BattleSession.song_transfer_progress * 100.0
+	_battle_transfer_bar.custom_minimum_size = Vector2(0, _u(30))
+	song_box.add_child(_battle_transfer_bar)
+
+	var setup_panel := PanelContainer.new()
+	setup_panel.add_theme_stylebox_override(
+		"panel", UITheme.glow_style(CARD_BG, UITheme.ROCK_RED, 5, 8))
+	_battle_lobby_controls.add_child(setup_panel)
+	var setup_box := VBoxContainer.new()
+	setup_box.add_theme_constant_override("separation", int(_u(12)))
+	setup_panel.add_child(setup_box)
+	setup_box.add_child(
+		_battle_section_title("◆", I18n.t("multiplayer_your_setup"), UITheme.ROCK_RED))
+
+	setup_box.add_child(_battle_field_label(I18n.t("instrument")))
+	_battle_instrument_option = OptionButton.new()
+	_battle_instrument_option.custom_minimum_size = Vector2(0, _u(82))
+	_battle_instrument_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_battle_instrument_option.add_item("?  %s" % I18n.t("choose_instrument"))
+	var instruments: Dictionary = BattleSession.selected_song.get("instruments", {})
+	var local_player: Dictionary = BattleSession.players.get(
+		BattleSession.local_uid, {})
+	var current_instrument := String(local_player.get("instrument", ""))
+	var instrument_order: Array[String] = ["guitar", "bass", "drums", "keys", "vocals"]
+	for instrument_value in instruments.keys():
+		var instrument_key := String(instrument_value)
+		if instrument_key not in instrument_order:
+			instrument_order.append(instrument_key)
+	for instrument in instrument_order:
+		if not instruments.has(instrument):
+			continue
+		_battle_instrument_option.add_item("%s  %s" % [
+			_instrument_icon(instrument), _instrument_label(instrument)])
+		_battle_instrument_option.set_item_metadata(
+			_battle_instrument_option.item_count - 1, instrument)
+		if instrument == current_instrument:
+			_battle_instrument_option.select(
+				_battle_instrument_option.item_count - 1)
+	_battle_instrument_option.disabled = instruments.is_empty()
+	_style_battle_option(_battle_instrument_option)
+	_battle_instrument_option.item_selected.connect(_on_battle_instrument_selected)
+	setup_box.add_child(_battle_instrument_option)
+
+	setup_box.add_child(_battle_field_label(I18n.t("difficulty")))
+	_battle_difficulty_option = OptionButton.new()
+	_battle_difficulty_option.custom_minimum_size = Vector2(0, _u(82))
+	_battle_difficulty_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var current_difficulty := String(local_player.get("difficulty", "Expert"))
+	var available_difficulties: Array = instruments.get(current_instrument, [])
+	if available_difficulties.is_empty():
+		available_difficulties = ["Easy", "Medium", "Hard", "Expert"]
+	for difficulty in ["Easy", "Medium", "Hard", "Expert"]:
+		if difficulty not in available_difficulties:
+			continue
+		_battle_difficulty_option.add_item("★  %s" % I18n.difficulty_name(difficulty))
+		_battle_difficulty_option.set_item_metadata(
+			_battle_difficulty_option.item_count - 1, difficulty)
+		if difficulty == current_difficulty:
+			_battle_difficulty_option.select(
+				_battle_difficulty_option.item_count - 1)
+	_battle_difficulty_option.disabled = current_instrument.is_empty()
+	_style_battle_option(_battle_difficulty_option)
+	_battle_difficulty_option.item_selected.connect(_on_battle_difficulty_selected)
+	setup_box.add_child(_battle_difficulty_option)
+
+	_battle_ready_button = Button.new()
+	var currently_ready := bool(local_player.get("ready", false))
+	var ready_icon := "✓" if currently_ready else "○"
+	_battle_ready_button.text = "%s  %s" % [
+		ready_icon, I18n.t("ready") if currently_ready else I18n.t("not_ready")]
+	_battle_ready_button.toggle_mode = true
+	_battle_ready_button.button_pressed = currently_ready
+	_battle_ready_button.custom_minimum_size = Vector2(0, _u(90))
+	UITheme.style_primary_button(
+		_battle_ready_button,
+		UITheme.ROCK_READY if currently_ready else UITheme.ROCK_STEEL_LIGHT,
+		_fs(28))
+	_battle_ready_button.toggled.connect(_on_battle_ready_toggled)
+	_battle_lobby_controls.add_child(_battle_ready_button)
+
+	if BattleSession.is_host:
+		_battle_start_button = Button.new()
+		_battle_start_button.text = "▶  %s" % I18n.t("start_match")
+		_battle_start_button.custom_minimum_size = Vector2(0, _u(104))
+		UITheme.style_primary_button(_battle_start_button, UITheme.ROCK_RED, _fs(31))
+		_battle_start_button.pressed.connect(BattleSession.host_start_match)
+		_battle_lobby_controls.add_child(_battle_start_button)
+
+	var leave_btn := Button.new()
+	leave_btn.text = "×  %s" % I18n.t("leave_room")
+	leave_btn.custom_minimum_size = Vector2(0, _u(70))
+	UITheme.style_danger_button(leave_btn, _fs(21))
+	leave_btn.pressed.connect(_on_battle_leave)
+	_battle_lobby_controls.add_child(leave_btn)
+	_refresh_battle_player_list()
+
+func _build_battle_host_options(parent: VBoxContainer) -> void:
+	var selected: Dictionary = BattleSession.selected_song
+	var current_mode := String(selected.get("mode", "guitar"))
+	var current_preset := String(selected.get("preset", "Tiles"))
+	if not BattleSession.is_host:
+		if not selected.is_empty():
+			var summary := Label.new()
+			summary.text = "%s  %s    •    %s" % [
+				"GTR" if current_mode == "guitar" else "KEY",
+				I18n.t("guitar_mode") if current_mode == "guitar" else I18n.t("piano_mode"),
+				I18n.preset_name(current_preset),
+			]
+			summary.custom_minimum_size = Vector2(0, _u(64))
+			summary.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			summary.add_theme_font_size_override("font_size", _fs(22))
+			summary.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+			parent.add_child(summary)
+		return
+
+	parent.add_child(_battle_section_title(
+		"★", I18n.t("multiplayer_host_settings"), UITheme.ROCK_PARCHMENT))
+	parent.add_child(_battle_field_label(I18n.t("game_mode")))
+	_battle_game_mode_option = OptionButton.new()
+	_battle_game_mode_option.custom_minimum_size = Vector2(0, _u(78))
+	_battle_game_mode_option.add_item("KEY  %s" % I18n.t("piano_mode"))
+	_battle_game_mode_option.set_item_metadata(0, "piano")
+	_battle_game_mode_option.add_item("GTR  %s" % I18n.t("guitar_mode"))
+	_battle_game_mode_option.set_item_metadata(1, "guitar")
+	_battle_game_mode_option.select(1 if current_mode == "guitar" else 0)
+	_style_battle_option(_battle_game_mode_option)
+	_battle_game_mode_option.item_selected.connect(_on_battle_game_mode_selected)
+	parent.add_child(_battle_game_mode_option)
+
+	parent.add_child(_battle_field_label(I18n.t("gameplay_preset")))
+	_battle_preset_option = OptionButton.new()
+	_battle_preset_option.custom_minimum_size = Vector2(0, _u(78))
+	for preset in PlayabilityScript.PRESET_ORDER:
+		var preset_tag := I18n.t("preset_assisted_tag") \
+			if PlayabilityScript.is_assisted_preset(preset) else I18n.t("preset_raw_tag")
+		_battle_preset_option.add_item(
+			"%s  %s" % [preset_tag, I18n.preset_name(preset)])
+		_battle_preset_option.set_item_metadata(
+			_battle_preset_option.item_count - 1, preset)
+		if preset == current_preset:
+			_battle_preset_option.select(_battle_preset_option.item_count - 1)
+	_style_battle_option(_battle_preset_option)
+	_battle_preset_option.item_selected.connect(_on_battle_preset_selected)
+	parent.add_child(_battle_preset_option)
+
+func _refresh_battle_player_list() -> void:
+	if not is_instance_valid(_battle_players_box):
+		return
+	for child in _battle_players_box.get_children():
+		child.queue_free()
+	for player in BattleSession._players_array():
+		var ready := bool(player.get("ready", false))
+		var accent := UITheme.ROCK_READY if ready else UITheme.ROCK_STEEL_LIGHT
+		var instrument := String(player.get("instrument", ""))
+		var card := PanelContainer.new()
+		card.custom_minimum_size = Vector2(0, _u(88))
+		card.add_theme_stylebox_override(
+			"panel", UITheme.glow_style(CARD_BG, accent, 5, 7))
+		_battle_players_box.add_child(card)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", int(_u(14)))
+		card.add_child(row)
+		row.add_child(_battle_icon_badge(
+			_instrument_icon(instrument), accent, 70))
+		var player_text := VBoxContainer.new()
+		player_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		player_text.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_child(player_text)
+		var name := Label.new()
+		name.text = "%s%s" % [
+			player.get("name", I18n.t("default_player_name")),
+			"  ★ HOST" if bool(player.get("host", false)) else "",
+		]
+		name.add_theme_font_size_override("font_size", _fs(24))
+		name.add_theme_color_override("font_color", TEXT_BRIGHT)
+		if UITheme.font_bold():
+			name.add_theme_font_override("font", UITheme.font_bold())
+		player_text.add_child(name)
+		var detail := Label.new()
+		detail.text = _instrument_label(instrument) if not instrument.is_empty() \
+			else I18n.t("choose_instrument")
+		var transfer_status := BattleSession.song_transfer_status_for(
+			String(player.get("uid", "")))
+		if not transfer_status.is_empty():
+			detail.text += "  •  %s" % transfer_status
+		detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		detail.add_theme_font_size_override("font_size", _fs(17))
+		detail.add_theme_color_override("font_color", TEXT_DIM)
+		player_text.add_child(detail)
+		var state_badge := Label.new()
+		state_badge.text = "✓\n%s" % I18n.t("ready") if ready else "…\n%s" % I18n.t("not_ready")
+		state_badge.custom_minimum_size = Vector2(_u(118), 0)
+		state_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		state_badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		state_badge.add_theme_font_size_override("font_size", _fs(17))
+		state_badge.add_theme_color_override("font_color", accent)
+		row.add_child(state_badge)
+
+func _on_battle_mode_selected(mode: String) -> void:
+	if BattleSession.session_state == "lobby":
+		return
+	_battle_mode = mode
+	for key in _battle_mode_buttons:
+		var button: Button = _battle_mode_buttons[key]
+		button.button_pressed = key == mode
+		_style_battle_mode_card(button, key == mode)
+	if is_instance_valid(_battle_overlay):
+		var help := _battle_overlay.find_child("ModeHelp", true, false) as Label
+		if help:
+			help.text = _battle_mode_help()
+
+func _battle_mode_help() -> String:
+	return I18n.t("battle_mode_help") if _battle_mode == "battle" else I18n.t("band_mode_help")
+
+func _on_battle_create() -> void:
+	BattleSession.set_song_catalog(found_songs)
+	BattleSession.create_room(_battle_mode, _battle_name_edit.text)
+
+func _on_battle_join() -> void:
+	BattleSession.set_song_catalog(found_songs)
+	BattleSession.join_room(_battle_code_edit.text, _battle_name_edit.text)
+
+func _on_battle_leave() -> void:
+	BattleSession.leave_room()
+	if is_instance_valid(_battle_connection_panel):
+		_battle_connection_panel.visible = true
+	_build_battle_lobby_controls()
+
+func _on_battle_song_selected(index: int) -> void:
+	if index <= 0 or index - 1 >= found_songs.size():
+		return
+	var song: Dictionary = found_songs[index - 1]
+	var instruments := _scan_song_instruments(song)
+	if instruments.is_empty():
+		instruments = {"guitar": ["Expert"]}
+	BattleSession.host_select_song(song, instruments)
+
+func _on_battle_instrument_selected(index: int) -> void:
+	if index <= 0:
+		BattleSession.update_local_player({"instrument": "", "ready": false})
+		return
+	var instrument := String(_battle_instrument_option.get_item_metadata(index))
+	var instruments: Dictionary = BattleSession.selected_song.get("instruments", {})
+	var difficulties: Array = instruments.get(instrument, ["Expert"])
+	var difficulty := "Expert" if "Expert" in difficulties else String(difficulties.back())
+	_refresh_battle_difficulty_options(difficulties, difficulty)
+	BattleSession.update_local_player({
+		"instrument": instrument, "difficulty": difficulty, "ready": false})
+
+func _refresh_battle_difficulty_options(
+		difficulties: Array, selected_difficulty: String) -> void:
+	if not is_instance_valid(_battle_difficulty_option):
+		return
+	_battle_difficulty_option.clear()
+	for difficulty in ["Easy", "Medium", "Hard", "Expert"]:
+		if difficulty not in difficulties:
+			continue
+		_battle_difficulty_option.add_item(I18n.difficulty_name(difficulty))
+		_battle_difficulty_option.set_item_metadata(
+			_battle_difficulty_option.item_count - 1, difficulty)
+		if difficulty == selected_difficulty:
+			_battle_difficulty_option.select(
+				_battle_difficulty_option.item_count - 1)
+	_battle_difficulty_option.disabled = difficulties.is_empty()
+
+func _on_battle_difficulty_selected(index: int) -> void:
+	var difficulty := String(_battle_difficulty_option.get_item_metadata(index))
+	BattleSession.update_local_player({
+		"difficulty": difficulty, "ready": false})
+
+func _on_battle_preset_selected(index: int) -> void:
+	var preset := String(_battle_preset_option.get_item_metadata(index))
+	var mode := String(BattleSession.selected_song.get("mode", "guitar"))
+	BattleSession.host_update_match_options(mode, preset)
+
+func _on_battle_game_mode_selected(index: int) -> void:
+	var mode := String(_battle_game_mode_option.get_item_metadata(index))
+	var preset := String(BattleSession.selected_song.get("preset", "Tiles"))
+	BattleSession.host_update_match_options(mode, preset)
+
+func _on_battle_ready_toggled(ready: bool) -> void:
+	var ready_icon := "✓" if ready else "○"
+	_battle_ready_button.text = "%s  %s" % [
+		ready_icon, I18n.t("ready") if ready else I18n.t("not_ready")]
+	UITheme.style_primary_button(
+		_battle_ready_button,
+		UITheme.ROCK_READY if ready else UITheme.ROCK_STEEL_LIGHT,
+		_fs(28))
+	BattleSession.update_local_player({"ready": ready})
+
+func _on_battle_state_changed(_state: String, detail: String) -> void:
+	if is_instance_valid(_battle_status_label):
+		_battle_status_label.text = detail
+		_battle_status_label.visible = _state != "lobby"
+	if is_instance_valid(_battle_connection_panel):
+		_battle_connection_panel.visible = BattleSession.session_state != "lobby"
+	# Validation errors (not ready, missing song, duplicate Band role, etc.)
+	# must not recreate the controls and visually clear the player's choices.
+	if is_instance_valid(_battle_overlay) and _state == "lobby" \
+			and not is_instance_valid(_battle_players_box):
+		_build_battle_lobby_controls()
+
+func _on_battle_lobby_changed(_players: Array, _room: Dictionary) -> void:
+	if not is_instance_valid(_battle_overlay):
+		return
+	_battle_mode = BattleSession.room_mode
+	if is_instance_valid(_battle_connection_panel):
+		_battle_connection_panel.visible = false
+	var current_fingerprint := _battle_song_render_key()
+	if not is_instance_valid(_battle_players_box) \
+			or current_fingerprint != _battle_rendered_song_fingerprint:
+		_build_battle_lobby_controls()
+	else:
+		_refresh_battle_player_list()
+
+func _on_battle_error(message: String) -> void:
+	if is_instance_valid(_battle_status_label):
+		_battle_status_label.visible = true
+		_battle_status_label.text = message
+		_battle_status_label.add_theme_color_override("font_color", UITheme.ROCK_DANGER)
+
+func _on_battle_song_transfer_progress(
+		progress: float, detail: String, active: bool) -> void:
+	if is_instance_valid(_battle_transfer_label):
+		_battle_transfer_label.visible = not detail.is_empty()
+		_battle_transfer_label.text = detail
+	if is_instance_valid(_battle_transfer_bar):
+		_battle_transfer_bar.visible = active
+		_battle_transfer_bar.value = progress * 100.0
+	if is_instance_valid(_battle_status_label) and not detail.is_empty():
+		_battle_status_label.text = detail
+		_battle_status_label.add_theme_color_override(
+			"font_color", UITheme.ROCK_PARCHMENT)
+
+func _on_battle_song_transfer_completed(_song: Dictionary) -> void:
+	AppCache.song_list_valid = false
+	_scan_songs(true)
+
+func _close_battle_menu() -> void:
+	if is_instance_valid(_battle_overlay):
+		_battle_overlay.queue_free()
+	_battle_overlay = null
+	_battle_back_button = null
+
+func _handle_back_navigation() -> bool:
+	if is_instance_valid(_tutorial_overlay):
+		_close_song_tutorial()
+		return true
+	if is_instance_valid(_battle_overlay):
+		_close_battle_menu()
+		return true
+	if is_instance_valid(_launch_overlay):
+		_close_launch_screen()
+		return true
+	return false
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("ui_cancel") and _handle_back_navigation():
+		get_viewport().set_input_as_handled()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_GO_BACK_REQUEST:
+		if not _handle_back_navigation() and is_inside_tree():
+			get_tree().quit()
+
+func _instrument_label(key: String) -> String:
+	return I18n.instrument_name(key)
+
+func _instrument_icon(key: String) -> String:
+	match key:
+		"guitar": return "GTR"
+		"bass": return "BAS"
+		"drums": return "DRM"
+		"keys": return "KEY"
+		"vocals": return "VOX"
+	return "?"
+
+func _battle_song_render_key() -> String:
+	return "%s|%s|%s" % [
+		BattleSession.selected_song.get("fingerprint", ""),
+		BattleSession.selected_song.get("mode", "guitar"),
+		BattleSession.selected_song.get("preset", "Tiles"),
+	]
+
+func _battle_field_label(text: String) -> Label:
+	var label := Label.new()
+	label.text = text.to_upper()
+	label.custom_minimum_size = Vector2(0, _u(32))
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", _fs(20))
+	label.add_theme_color_override("font_color", TEXT_DIM)
+	if UITheme.font_bold():
+		label.add_theme_font_override("font", UITheme.font_bold())
+	return label
+
+func _style_battle_option(option: OptionButton) -> void:
+	option.add_theme_font_size_override("font_size", _fs(26))
+	option.add_theme_color_override("font_color", TEXT_BRIGHT)
+	var popup := option.get_popup()
+	popup.add_theme_font_size_override("font_size", _fs(25))
+	popup.add_theme_constant_override("v_separation", int(_u(16)))
+	popup.add_theme_constant_override("item_start_padding", int(_u(18)))
+	popup.add_theme_constant_override("item_end_padding", int(_u(18)))
+
+func _battle_icon_badge(text: String, accent: Color, size: float) -> PanelContainer:
+	var badge := PanelContainer.new()
+	badge.custom_minimum_size = Vector2(_u(size), _u(size))
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style := UITheme.glow_style(
+		Color(accent.r, accent.g, accent.b, 0.16), accent, 18, 10)
+	style.set_border_width_all(2)
+	badge.add_theme_stylebox_override("panel", style)
+	var label := Label.new()
+	label.text = text
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_size_override(
+		"font_size", _fs(34 if text.length() <= 3 else 22))
+	label.add_theme_color_override("font_color", accent.lightened(0.28))
+	if UITheme.font_bold():
+		label.add_theme_font_override("font", UITheme.font_bold())
+	badge.add_child(label)
+	return badge
+
+func _battle_section_title(icon_text: String, text: String, accent: Color) -> Label:
+	var label := Label.new()
+	label.text = "%s   %s" % [icon_text, text.to_upper()]
+	label.custom_minimum_size = Vector2(0, _u(46))
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", _fs(25))
+	label.add_theme_color_override("font_color", accent.lightened(0.22))
+	if UITheme.font_bold():
+		label.add_theme_font_override("font", UITheme.font_bold())
+	return label
+
+func _make_battle_mode_card(
+		mode: String, icon_text: String, title_text: String,
+		subtitle: String, accent: Color) -> Button:
+	var button := Button.new()
+	button.toggle_mode = true
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.custom_minimum_size = Vector2(0, _u(156))
+	button.set_meta("battle_mode", mode)
+	button.set_meta("battle_accent", accent)
+	button.text = ""
+
+	var row := HBoxContainer.new()
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = _u(14)
+	row.offset_top = _u(14)
+	row.offset_right = -_u(14)
+	row.offset_bottom = -_u(14)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", int(_u(16)))
+	button.add_child(row)
+	row.add_child(_battle_icon_badge(icon_text, accent, 104))
+
+	var words := VBoxContainer.new()
+	words.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	words.alignment = BoxContainer.ALIGNMENT_CENTER
+	words.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(words)
+	var title := Label.new()
+	title.text = title_text
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.add_theme_font_size_override("font_size", _fs(28))
+	title.add_theme_color_override("font_color", accent.lightened(0.28))
+	if UITheme.font_bold():
+		title.add_theme_font_override("font", UITheme.font_bold())
+	words.add_child(title)
+	var hint := Label.new()
+	hint.text = subtitle
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint.add_theme_font_size_override("font_size", _fs(17))
+	hint.add_theme_color_override("font_color", TEXT_DIM)
+	words.add_child(hint)
+	return button
+
+func _style_battle_mode_card(button: Button, selected: bool) -> void:
+	var accent: Color = button.get_meta("battle_accent", UITheme.ROCK_STEEL_LIGHT)
+	var normal := UITheme.glow_style(
+		Color(accent.r, accent.g, accent.b, 0.24 if selected else 0.08),
+		accent if selected else UITheme.ROCK_STEEL, 5, 8 if selected else 4)
+	normal.set_border_width_all(3 if selected else 1)
+	var hover := normal.duplicate()
+	hover.bg_color = Color(accent.r, accent.g, accent.b, 0.20)
+	var pressed := normal.duplicate()
+	pressed.bg_color = Color(accent.r, accent.g, accent.b, 0.32)
+	button.add_theme_stylebox_override("normal", normal)
+	button.add_theme_stylebox_override("hover", hover)
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 # =====================================================================
 #  LAUNCH SCREEN
 # =====================================================================
@@ -854,16 +2296,13 @@ func _open_launch_screen(index: int) -> void:
 	_launch_overlay.theme = theme
 	add_child(_launch_overlay)
 
-	# Background — near-opaque dark with a soft accent glow behind the hero
+	# Concert-stage background with a dark readability layer.
 	var bg := ColorRect.new()
-	bg.color = Color(0.03, 0.025, 0.07, 0.985)
+	bg.color = Color(0.020, 0.016, 0.014, 0.975)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	bg.mouse_filter = Control.MOUSE_FILTER_STOP  # block clicks to song list
 	_launch_overlay.add_child(bg)
-
-	var hero_glow := UITheme._make_glow_blob(UITheme.NEON_PURPLE, 0.14)
-	hero_glow.position = Vector2(get_viewport_rect().size.x * 0.5 - 310, -260)
-	_launch_overlay.add_child(hero_glow)
+	UITheme.add_hardrock_background(bg)
 
 	var sa := UITheme.safe_insets(self)
 	var scroll := ScrollContainer.new()
@@ -879,51 +2318,85 @@ func _open_launch_screen(index: int) -> void:
 	vbox.add_theme_constant_override("separation", int(_u(16)))
 	scroll.add_child(vbox)
 
-	# --- Top bar: Back + Delete ---
+	# --- Chrome top bar: Back + screen identity + Help/Delete ---
+	var top_panel := PanelContainer.new()
+	var top_style := UITheme.glow_style(
+		Color(0.035, 0.029, 0.026, 0.97), UITheme.ROCK_RED, 5, 8)
+	top_style.border_color = UITheme.ROCK_STEEL
+	top_style.border_width_left = int(_u(5))
+	top_style.border_width_bottom = int(_u(4))
+	top_style.content_margin_left = _u(12)
+	top_style.content_margin_right = _u(12)
+	top_style.content_margin_top = _u(10)
+	top_style.content_margin_bottom = _u(10)
+	top_panel.add_theme_stylebox_override("panel", top_style)
+	vbox.add_child(top_panel)
 	var top_bar := HBoxContainer.new()
+	top_bar.custom_minimum_size = Vector2(0, _u(72))
 	top_bar.add_theme_constant_override("separation", int(_u(10)))
-	vbox.add_child(top_bar)
+	top_panel.add_child(top_bar)
 
 	var back_btn := Button.new()
 	back_btn.text = "‹  " + I18n.t("back")
 	UITheme.style_ghost_button(back_btn, _fs(19))
-	back_btn.custom_minimum_size = Vector2(_u(118), _u(56))
+	back_btn.custom_minimum_size = Vector2(_u(132), _u(64))
 	back_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	back_btn.pressed.connect(_close_launch_screen)
 	top_bar.add_child(back_btn)
 
-	# Spacer
-	var top_spacer := Control.new()
-	top_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top_bar.add_child(top_spacer)
+	top_bar.add_child(UITheme.make_game_logo(_u(62)))
+	var screen_identity := VBoxContainer.new()
+	screen_identity.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	screen_identity.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_bar.add_child(screen_identity)
+	var identity_kicker := Label.new()
+	identity_kicker.text = I18n.t("launch_kicker")
+	identity_kicker.add_theme_font_size_override("font_size", _fs(13))
+	identity_kicker.add_theme_color_override("font_color", UITheme.ROCK_PARCHMENT)
+	screen_identity.add_child(identity_kicker)
+	var identity_title := Label.new()
+	identity_title.text = I18n.t("launch_title").to_upper()
+	identity_title.add_theme_font_size_override("font_size", _fs(25))
+	identity_title.add_theme_color_override("font_color", TEXT_BRIGHT)
+	if UITheme.font_bold():
+		identity_title.add_theme_font_override("font", UITheme.font_bold())
+	screen_identity.add_child(identity_title)
 
 	var settings_help_btn := Button.new()
-	settings_help_btn.text = "?"
+	settings_help_btn.text = "?\n%s" % I18n.t("menu_guide")
 	settings_help_btn.tooltip_text = I18n.t("settings_tutorial_title")
-	UITheme.style_ghost_button(settings_help_btn, _fs(22))
-	settings_help_btn.custom_minimum_size = Vector2(_u(56), _u(56))
+	UITheme.style_ghost_button(settings_help_btn, _fs(15))
+	settings_help_btn.custom_minimum_size = Vector2(_u(96), _u(64))
 	settings_help_btn.pressed.connect(_open_game_settings_tutorial)
 	top_bar.add_child(settings_help_btn)
 
 	# Delete button — only for user-imported songs
 	if song["path"].begins_with("user://"):
 		var del_btn := Button.new()
-		del_btn.text = I18n.t("delete")
+		del_btn.text = "×\n%s" % I18n.t("delete").to_upper()
 		UITheme.style_danger_button(del_btn, _fs(19))
-		del_btn.custom_minimum_size = Vector2(_u(90), _u(56))
+		del_btn.custom_minimum_size = Vector2(_u(108), _u(64))
 		del_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 		del_btn.pressed.connect(_on_delete_song)
 		top_bar.add_child(del_btn)
 
-	# --- Hero: album art + title/artist ---
+	# --- Song hero card: album art + title/artist ---
+	var info_panel := PanelContainer.new()
+	var info_style := UITheme.card_style(UITheme.ROCK_RED)
+	info_style.bg_color = CARD_BG
+	info_style.border_color = UITheme.ROCK_STEEL
+	info_style.border_width_bottom = int(_u(4))
+	info_panel.add_theme_stylebox_override("panel", info_style)
+	vbox.add_child(info_panel)
 	var info_hbox := HBoxContainer.new()
 	info_hbox.add_theme_constant_override("separation", int(_u(20)))
-	vbox.add_child(info_hbox)
+	info_panel.add_child(info_hbox)
 
 	var art_texture := _load_album_art(song)
 	if art_texture:
 		var art_frame := PanelContainer.new()
-		var frame_style := UITheme.glow_style(Color(0, 0, 0, 0), UITheme.NEON_CYAN, int(_u(16)), int(_u(8)))
+		var frame_style := UITheme.glow_style(
+			Color(0, 0, 0, 0), UITheme.ROCK_STEEL_LIGHT, 4, int(_u(8)))
 		frame_style.content_margin_left = 0; frame_style.content_margin_right = 0
 		frame_style.content_margin_top = 0; frame_style.content_margin_bottom = 0
 		art_frame.add_theme_stylebox_override("panel", frame_style)
@@ -937,8 +2410,8 @@ func _open_launch_screen(index: int) -> void:
 		art_frame.add_child(art_rect)
 	else:
 		var art_panel := PanelContainer.new()
-		var art_style := UITheme.flat_style(Color(0.13, 0.12, 0.22), int(_u(16)))
-		art_style.border_color = UITheme.CARD_BORDER
+		var art_style := UITheme.flat_style(Color(0.055, 0.047, 0.041), 4)
+		art_style.border_color = UITheme.ROCK_STEEL
 		art_style.set_border_width_all(1)
 		art_panel.add_theme_stylebox_override("panel", art_style)
 		art_panel.custom_minimum_size = Vector2(_u(156), _u(156))
@@ -947,7 +2420,7 @@ func _open_launch_screen(index: int) -> void:
 		var art_icon := Label.new()
 		art_icon.text = "♪"
 		art_icon.add_theme_font_size_override("font_size", _fs(64))
-		art_icon.add_theme_color_override("font_color", Color(UITheme.NEON_PURPLE.r, UITheme.NEON_PURPLE.g, UITheme.NEON_PURPLE.b, 0.55))
+		art_icon.add_theme_color_override("font_color", UITheme.ROCK_STEEL_LIGHT)
 		art_icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		art_icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		art_panel.add_child(art_icon)
@@ -957,6 +2430,14 @@ func _open_launch_screen(index: int) -> void:
 	info_vbox.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	info_vbox.add_theme_constant_override("separation", int(_u(6)))
 	info_hbox.add_child(info_vbox)
+
+	var now_playing := Label.new()
+	now_playing.text = "◆  %s" % I18n.t("now_playing")
+	now_playing.add_theme_font_size_override("font_size", _fs(14))
+	now_playing.add_theme_color_override("font_color", UITheme.ROCK_RED.lightened(0.28))
+	if UITheme.font_bold():
+		now_playing.add_theme_font_override("font", UITheme.font_bold())
+	info_vbox.add_child(now_playing)
 
 	var title_lbl := Label.new()
 	title_lbl.text = parsed["title"]
@@ -974,6 +2455,33 @@ func _open_launch_screen(index: int) -> void:
 		artist_lbl.add_theme_color_override("font_color", TEXT_DIM)
 		info_vbox.add_child(artist_lbl)
 
+	var loadout_banner := PanelContainer.new()
+	var loadout_style := UITheme.glow_style(
+		CARD_BG, UITheme.ROCK_RED, 5, 8)
+	loadout_style.border_width_left = int(_u(6))
+	loadout_style.content_margin_left = _u(18)
+	loadout_style.content_margin_right = _u(18)
+	loadout_style.content_margin_top = _u(10)
+	loadout_style.content_margin_bottom = _u(10)
+	loadout_banner.add_theme_stylebox_override("panel", loadout_style)
+	vbox.add_child(loadout_banner)
+	var loadout_row := HBoxContainer.new()
+	loadout_banner.add_child(loadout_row)
+	var loadout_title := Label.new()
+	loadout_title.text = "⚡  %s" % I18n.t("build_loadout")
+	loadout_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	loadout_title.add_theme_font_size_override("font_size", _fs(22))
+	loadout_title.add_theme_color_override("font_color", UITheme.ROCK_IVORY)
+	if UITheme.font_bold():
+		loadout_title.add_theme_font_override("font", UITheme.font_bold())
+	loadout_row.add_child(loadout_title)
+	var loadout_hint := Label.new()
+	loadout_hint.text = I18n.t("build_loadout_hint")
+	loadout_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	loadout_hint.add_theme_font_size_override("font_size", _fs(14))
+	loadout_hint.add_theme_color_override("font_color", TEXT_DIM)
+	loadout_row.add_child(loadout_hint)
+
 	# --- Instrument selection ---
 	if _launch_instruments.size() > 1 or not _launch_instruments.has("guitar"):
 		vbox.add_child(_section_label(I18n.t("instrument")))
@@ -988,9 +2496,10 @@ func _open_launch_screen(index: int) -> void:
 			if not _launch_instruments.has(inst_key):
 				continue
 			var btn := Button.new()
-			btn.text = I18n.instrument_name(inst_key)
-			btn.add_theme_font_size_override("font_size", _fs(19))
-			btn.custom_minimum_size = Vector2(0, _u(58))
+			btn.text = "%s\n%s" % [
+				_instrument_icon(inst_key), I18n.instrument_name(inst_key).to_upper()]
+			btn.add_theme_font_size_override("font_size", _fs(18))
+			btn.custom_minimum_size = Vector2(0, _u(74))
 			btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			btn.pressed.connect(_on_instrument_selected.bind(inst_key))
 			inst_hbox.add_child(btn)
@@ -1025,9 +2534,12 @@ func _open_launch_screen(index: int) -> void:
 	_launch_preset_btns.clear()
 	for preset in PlayabilityScript.PRESET_ORDER:
 		var pbtn := Button.new()
-		pbtn.text = I18n.preset_name(preset)
+		pbtn.text = "%s\n%s" % [
+			I18n.t("preset_assisted_tag") if PlayabilityScript.is_assisted_preset(preset) \
+				else I18n.t("preset_raw_tag"),
+			I18n.preset_name(preset).to_upper()]
 		pbtn.add_theme_font_size_override("font_size", _fs(17))
-		pbtn.custom_minimum_size = Vector2(0, _u(56))
+		pbtn.custom_minimum_size = Vector2(0, _u(70))
 		pbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		pbtn.pressed.connect(_on_preset_selected.bind(preset))
 		preset_grid.add_child(pbtn)
@@ -1043,9 +2555,10 @@ func _open_launch_screen(index: int) -> void:
 	_launch_mode_btns.clear()
 	for mode_key in ["piano", "guitar"]:
 		var mbtn := Button.new()
-		mbtn.text = I18n.t("mode_piano") if mode_key == "piano" else I18n.t("mode_guitar")
+		mbtn.text = "4K\n%s" % I18n.t("mode_piano").to_upper() \
+			if mode_key == "piano" else "5K\n%s" % I18n.t("mode_guitar").to_upper()
 		mbtn.add_theme_font_size_override("font_size", _fs(18))
-		mbtn.custom_minimum_size = Vector2(0, _u(56))
+		mbtn.custom_minimum_size = Vector2(0, _u(70))
 		mbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		mbtn.pressed.connect(_on_mode_selected.bind(mode_key))
 		mode_hbox.add_child(mbtn)
@@ -1061,9 +2574,10 @@ func _open_launch_screen(index: int) -> void:
 	_launch_view_btns.clear()
 	for view_key in ["gh", "flat"]:
 		var vbtn := Button.new()
-		vbtn.text = I18n.t("view_gh") if view_key == "gh" else I18n.t("view_flat")
+		vbtn.text = "3D\n%s" % I18n.t("view_gh").to_upper() \
+			if view_key == "gh" else "2D\n%s" % I18n.t("view_flat").to_upper()
 		vbtn.add_theme_font_size_override("font_size", _fs(18))
-		vbtn.custom_minimum_size = Vector2(0, _u(56))
+		vbtn.custom_minimum_size = Vector2(0, _u(68))
 		vbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		vbtn.pressed.connect(_on_view_selected.bind(view_key))
 		view_hbox.add_child(vbtn)
@@ -1079,9 +2593,9 @@ func _open_launch_screen(index: int) -> void:
 	_launch_vfx_btns.clear()
 	for quality_key in ["full", "balanced", "performance"]:
 		var qbtn := Button.new()
-		qbtn.text = I18n.t("vfx_" + quality_key)
+		qbtn.text = "FX\n%s" % I18n.t("vfx_" + quality_key).to_upper()
 		qbtn.add_theme_font_size_override("font_size", _fs(16))
-		qbtn.custom_minimum_size = Vector2(0, _u(54))
+		qbtn.custom_minimum_size = Vector2(0, _u(66))
 		qbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		qbtn.pressed.connect(_on_vfx_quality_selected.bind(quality_key))
 		vfx_hbox.add_child(qbtn)
@@ -1097,9 +2611,9 @@ func _open_launch_screen(index: int) -> void:
 	_launch_rock_meter_btns.clear()
 	for rock_mode in ["off", "visual", "fail"]:
 		var rock_btn := Button.new()
-		rock_btn.text = I18n.t("rock_meter_" + rock_mode)
+		rock_btn.text = "♥\n%s" % I18n.t("rock_meter_" + rock_mode).to_upper()
 		rock_btn.add_theme_font_size_override("font_size", _fs(15))
-		rock_btn.custom_minimum_size = Vector2(0, _u(54))
+		rock_btn.custom_minimum_size = Vector2(0, _u(66))
 		rock_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		rock_btn.pressed.connect(_on_rock_meter_selected.bind(rock_mode))
 		rock_hbox.add_child(rock_btn)
@@ -1113,9 +2627,9 @@ func _open_launch_screen(index: int) -> void:
 	_launch_crowd_btns.clear()
 	for crowd_mode in ["on", "off"]:
 		var crowd_btn := Button.new()
-		crowd_btn.text = I18n.t("crowd_" + crowd_mode)
+		crowd_btn.text = "♫\n%s" % I18n.t("crowd_" + crowd_mode).to_upper()
 		crowd_btn.add_theme_font_size_override("font_size", _fs(17))
-		crowd_btn.custom_minimum_size = Vector2(0, _u(54))
+		crowd_btn.custom_minimum_size = Vector2(0, _u(66))
 		crowd_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		crowd_btn.pressed.connect(_on_crowd_audio_selected.bind(crowd_mode))
 		crowd_hbox.add_child(crowd_btn)
@@ -1129,23 +2643,13 @@ func _open_launch_screen(index: int) -> void:
 	_launch_miss_sfx_btns.clear()
 	for miss_sfx_mode in ["on", "off"]:
 		var miss_sfx_btn := Button.new()
-		miss_sfx_btn.text = I18n.t("miss_sfx_" + miss_sfx_mode)
+		miss_sfx_btn.text = "!\n%s" % I18n.t("miss_sfx_" + miss_sfx_mode).to_upper()
 		miss_sfx_btn.add_theme_font_size_override("font_size", _fs(17))
-		miss_sfx_btn.custom_minimum_size = Vector2(0, _u(54))
+		miss_sfx_btn.custom_minimum_size = Vector2(0, _u(66))
 		miss_sfx_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		miss_sfx_btn.pressed.connect(_on_miss_sfx_selected.bind(miss_sfx_mode))
 		miss_sfx_hbox.add_child(miss_sfx_btn)
 		_launch_miss_sfx_btns[miss_sfx_mode] = miss_sfx_btn
-
-	# Developer-only assist for device testing. Release exports never show it.
-	if OS.is_debug_build():
-		var infinite_toggle := CheckButton.new()
-		infinite_toggle.text = I18n.t("infinite_overdrive_test")
-		infinite_toggle.button_pressed = GameScript.debug_infinite_overdrive
-		infinite_toggle.add_theme_font_size_override("font_size", _fs(16))
-		infinite_toggle.custom_minimum_size = Vector2(0, _u(54))
-		infinite_toggle.toggled.connect(_on_infinite_overdrive_toggled)
-		vbox.add_child(infinite_toggle)
 
 	# --- Speed slider ---
 	vbox.add_child(_section_label(I18n.t("speed")))
@@ -1183,18 +2687,21 @@ func _open_launch_screen(index: int) -> void:
 	spacer.custom_minimum_size = Vector2(0, _u(10))
 	vbox.add_child(spacer)
 
-	# --- START button — big neon green glow ---
+	# --- START button — stamped red stage trigger ---
 	var start_btn := Button.new()
-	start_btn.text = I18n.t("start")
-	UITheme.style_primary_button(start_btn, UITheme.NEON_GREEN, _fs(28))
-	start_btn.custom_minimum_size = Vector2(0, _u(78))
+	start_btn.name = "LaunchStartButton"
+	start_btn.text = "▶  %s" % I18n.t("start").to_upper()
+	UITheme.style_primary_button(start_btn, UITheme.ROCK_RED, _fs(31))
+	start_btn.custom_minimum_size = Vector2(0, _u(98))
 	start_btn.pressed.connect(_on_launch_start)
 	vbox.add_child(start_btn)
 
 	# Gentle pulse on the start button
 	start_btn.pivot_offset = start_btn.size / 2.0
 	start_btn.resized.connect(func(): start_btn.pivot_offset = start_btn.size / 2.0)
-	var pulse := create_tween()
+	# Bind the infinite pulse to the button. It is destroyed with the launch
+	# overlay, preventing an orphaned infinite tween when Back is pressed.
+	var pulse := start_btn.create_tween()
 	pulse.set_loops()
 	pulse.tween_property(start_btn, "scale", Vector2(1.015, 1.015), 0.8) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -1214,7 +2721,7 @@ func _open_launch_screen(index: int) -> void:
 
 	# Fade in
 	_launch_overlay.modulate.a = 0.0
-	var tw := create_tween()
+	var tw := _launch_overlay.create_tween()
 	tw.tween_property(_launch_overlay, "modulate:a", 1.0, 0.2)
 
 func _close_launch_screen() -> void:
@@ -1464,9 +2971,9 @@ func _rebuild_difficulty_buttons(container: HBoxContainer) -> void:
 	var diffs: Array = _launch_instruments.get(_launch_selected_instrument, [])
 	for diff in diffs:
 		var btn := Button.new()
-		btn.text = I18n.difficulty_name(diff as String)
+		btn.text = "★\n%s" % I18n.difficulty_name(diff as String).to_upper()
 		btn.add_theme_font_size_override("font_size", _fs(18))
-		btn.custom_minimum_size = Vector2(0, _u(56))
+		btn.custom_minimum_size = Vector2(0, _u(68))
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.pressed.connect(_on_difficulty_selected.bind(diff as String))
 		container.add_child(btn)
@@ -1497,31 +3004,37 @@ func _restyle_chip_group(btns: Dictionary, selected_key: String, accent: Color) 
 		UITheme.style_chip_button(btns[k], k == selected_key, accent)
 
 func _update_instrument_highlight() -> void:
-	_restyle_chip_group(_launch_instrument_btns, _launch_selected_instrument, UITheme.NEON_CYAN)
+	_restyle_chip_group(_launch_instrument_btns, _launch_selected_instrument, UITheme.ROCK_RED)
 
 func _update_difficulty_highlight() -> void:
-	_restyle_chip_group(_launch_diff_btns, _launch_selected_difficulty, UITheme.NEON_MAGENTA)
+	_restyle_chip_group(_launch_diff_btns, _launch_selected_difficulty, UITheme.ROCK_RED)
 
 func _update_preset_highlight() -> void:
-	_restyle_chip_group(_launch_preset_btns, _launch_selected_preset, UITheme.NEON_PURPLE)
+	_restyle_chip_group(_launch_preset_btns, _launch_selected_preset, UITheme.ROCK_RED)
 
 func _update_mode_highlight() -> void:
-	_restyle_chip_group(_launch_mode_btns, _launch_selected_mode, UITheme.NEON_CYAN)
+	_restyle_chip_group(_launch_mode_btns, _launch_selected_mode, UITheme.ROCK_RED)
 
 func _update_view_highlight() -> void:
-	_restyle_chip_group(_launch_view_btns, Settings.highway_style, UITheme.NEON_MAGENTA)
+	_restyle_chip_group(_launch_view_btns, Settings.highway_style, UITheme.ROCK_RED)
 
 func _update_vfx_quality_highlight() -> void:
-	_restyle_chip_group(_launch_vfx_btns, Settings.vfx_quality, UITheme.NEON_GOLD)
+	_restyle_chip_group(_launch_vfx_btns, Settings.vfx_quality, UITheme.ROCK_RED)
 
 func _update_rock_meter_highlight() -> void:
-	_restyle_chip_group(_launch_rock_meter_btns, Settings.rock_meter_mode, UITheme.NEON_GREEN)
+	_restyle_chip_group(_launch_rock_meter_btns, Settings.rock_meter_mode, UITheme.ROCK_RED)
 
 func _update_crowd_audio_highlight() -> void:
-	_restyle_chip_group(_launch_crowd_btns, "on" if Settings.crowd_audio_enabled else "off", UITheme.NEON_CYAN)
+	_restyle_chip_group(
+		_launch_crowd_btns,
+		"on" if Settings.crowd_audio_enabled else "off",
+		UITheme.ROCK_RED)
 
 func _update_miss_sfx_highlight() -> void:
-	_restyle_chip_group(_launch_miss_sfx_btns, "on" if Settings.miss_sfx_enabled else "off", UITheme.NEON_MAGENTA)
+	_restyle_chip_group(
+		_launch_miss_sfx_btns,
+		"on" if Settings.miss_sfx_enabled else "off",
+		UITheme.ROCK_RED)
 
 func _on_view_selected(view_key: String) -> void:
 	Settings.highway_style = view_key
@@ -1547,9 +3060,6 @@ func _on_miss_sfx_selected(miss_sfx_mode: String) -> void:
 	Settings.miss_sfx_enabled = miss_sfx_mode == "on"
 	Settings.save_settings()
 	_update_miss_sfx_highlight()
-
-func _on_infinite_overdrive_toggled(enabled: bool) -> void:
-	GameScript.debug_infinite_overdrive = enabled
 
 func _on_preset_selected(preset: String) -> void:
 	_launch_selected_preset = preset
@@ -1602,6 +3112,7 @@ func _on_launch_start() -> void:
 	GameScript.song_source = song["path"]
 	GameScript.song_difficulty = _launch_selected_difficulty
 	GameScript.song_instrument = _launch_selected_instrument
+	GameScript.song_available_instruments = _launch_instruments.duplicate(true)
 	GameScript.song_mode = _launch_selected_mode
 	GameScript.song_preset = _launch_selected_preset
 
@@ -1617,17 +3128,18 @@ func _on_import_pressed() -> void:
 		var plugin = Engine.get_singleton("NativeAudioDecoder")
 		if not plugin.is_connected("files_picked", _on_plugin_files_picked):
 			plugin.connect("files_picked", _on_plugin_files_picked)
-		plugin.call("openFilePicker")
+		_native_picker_context = "songs"
+		plugin.call("openFilePicker", I18n.t("file_dialog_title"))
 		return
 
 	var filters := PackedStringArray([
-		"*.sng ; SNG Sarki Paketi",
-		"*.zip ; ZIP Arsiv",
-		"*.chart ; Chart Dosyasi",
-		"*.mid ; MIDI Dosyasi",
+		"*.sng ; SNG",
+		"*.zip ; ZIP",
+		"*.chart ; CHART",
+		"*.mid ; MIDI",
 		"*.con ; Rock Band CON",
 		"*.live ; Rock Band LIVE",
-		"* ; Tum Dosyalar",
+		"* ; %s" % I18n.t("all_files"),
 	])
 	DisplayServer.file_dialog_show(
 		I18n.t("file_dialog_title"),
@@ -1640,10 +3152,15 @@ func _on_import_pressed() -> void:
 	)
 
 func _on_plugin_files_picked(paths_str: String) -> void:
+	var picker_context := _native_picker_context
+	_native_picker_context = ""
 	if paths_str == "":
 		return
 	var uris := paths_str.split(";", false)
 	print("Import: plugin picker returned %d files" % uris.size())
+	if picker_context == "arena_highway":
+		_install_arena_highway_from_selected_path(String(uris[0]))
+		return
 	# Convert to PackedStringArray and use same flow as _on_files_selected
 	var selected := PackedStringArray(uris)
 	_on_files_selected(true, selected, 0)
@@ -1995,7 +3512,7 @@ func _convert_mogg_to_stereo(input_ogg: String, output_path: String) -> bool:
 
 func _on_import_decode_progress(pct: int, stage: String) -> void:
 	if _import_progress_label:
-		_import_progress_label.text = "%s %%%d" % [stage, pct]
+		_import_progress_label.text = "%s  %%%d" % [I18n.decode_stage(stage), pct]
 	if _import_progress_bar:
 		_import_progress_bar.value = pct
 		_import_progress_bar.visible = true
@@ -2041,19 +3558,21 @@ func _disconnect_import_signals() -> void:
 	_import_decode_plugin = null
 
 func _show_import_progress(text: String) -> void:
+	var status_parent: Container = _main_actions_container \
+		if is_instance_valid(_main_actions_container) else card_container
 	if _import_progress_label == null:
 		_import_progress_label = Label.new()
 		_import_progress_label.add_theme_font_size_override("font_size", _fs(20))
 		_import_progress_label.add_theme_color_override("font_color", ACCENT)
 		_import_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		card_container.add_child(_import_progress_label)
+		status_parent.add_child(_import_progress_label)
 	if _import_progress_bar == null:
 		_import_progress_bar = ProgressBar.new()
 		_import_progress_bar.show_percentage = false
 		_import_progress_bar.max_value = 100
-		_import_progress_bar.custom_minimum_size = Vector2(0, _u(8))
+		_import_progress_bar.custom_minimum_size = Vector2(0, _u(18))
 		_import_progress_bar.visible = false
-		card_container.add_child(_import_progress_bar)
+		status_parent.add_child(_import_progress_bar)
 	_import_progress_label.text = text
 	_import_progress_label.visible = true
 
