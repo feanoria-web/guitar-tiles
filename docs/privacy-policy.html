@@ -33,7 +33,7 @@
 <body>
 
 <h1>Riffline — Privacy Policy</h1>
-<p class="updated">Last updated: July 27, 2026</p>
+<p class="updated">Last updated: August 15, 2026</p>
 
 <p>Riffline ("the app") is developed by Feanorian ("we", "us"). This policy explains what happens to your data when you use the app.</p>
 
@@ -42,12 +42,32 @@
   <li>Riffline's single-player features work offline. Internet access is used only for optional online multiplayer and external links.</li>
   <li>Online multiplayer uses Firebase Authentication and Realtime Database for temporary rooms and WebRTC connection setup.</li>
   <li>Players in the same room receive your chosen player name, instrument/ready state, live score and gameplay status.</li>
-  <li>Imported song, chart and audio files are never uploaded to Firebase or sent to other players.</li>
+  <li>Vocals mode uses the microphone. Your voice is analysed live on your device only; no audio is recorded, stored or uploaded.</li>
+  <li>Imported song files stay on your device unless you, as the room host, explicitly press the button that shares the selected song with the players in your room. Nothing is uploaded automatically.</li>
   <li>The app contains no ads, no analytics, and no crash-reporting SDKs.</li>
 </ul>
 
 <h2>Song files you import</h2>
-<p>When you import a song file, Riffline uses Android's standard file picker (Storage Access Framework). You choose the file directly; the app only reads the file you select and copies it into its own private app storage on your device. Riffline never scans your device's storage, never requests broad storage or media permissions, and never uploads imported files anywhere.</p>
+<p>When you import a song file, Riffline uses Android's standard file picker (Storage Access Framework). You choose the file directly; the app only reads the file you select and copies it into its own private app storage on your device. Riffline never scans your device's storage and never requests broad storage or media permissions.</p>
+
+<h2>Sharing a song in online multiplayer</h2>
+<p>Online multiplayer requires every player to have the same song files. If some players in your room are missing the selected song, the room host can press a "share song" button to transfer it. This transfer never starts on its own: it happens only when the host taps that button.</p>
+<ul>
+  <li>The selected song's files (chart, metadata and audio) are uploaded to a private Cloudflare R2 storage bucket operated by us, through a Cloudflare Worker, and downloaded from there by the players in that room.</li>
+  <li>The upload is restricted to the room: every request must carry a valid Firebase authentication token and the requester must be a member of that room. Only the host can upload or delete a room's song.</li>
+  <li>Each uploaded song expires 24 hours after it is uploaded, and the host can delete it earlier. Uploading a new song for a room replaces the previous one.</li>
+  <li>Only the song files you selected for the match are transferred. No other file on your device is read or uploaded.</li>
+</ul>
+<p>Please only share content you have the right to share. You are responsible for the files you import and transfer.</p>
+
+<h2>Microphone and Vocals mode</h2>
+<p>Riffline's Vocals (karaoke) mode needs the microphone to detect the pitch of the note you are singing. The app asks for microphone permission the first time you use that mode, after showing an explanation, and you can decline.</p>
+<ul>
+  <li>Audio is analysed on your device in real time, in fragments a few milliseconds long, purely to estimate pitch, and is discarded immediately afterwards.</li>
+  <li>Your voice is never recorded, never written to a file, and never sent to any server, service, or other player. In online matches only your score is transmitted, never your audio.</li>
+  <li>Your consent choice is stored only in the settings file on your device.</li>
+  <li>The microphone is not used anywhere else in the app.</li>
+</ul>
 
 <h2>Scores and progress</h2>
 <p>Your single-player scores, high scores and settings are saved in a file on your device only and are deleted when you uninstall the app. During an online match, your current score, combo, performance meter and song position are transmitted directly to the room host and other players so that the shared scoreboard and Band mode can function. Online match state is not used for advertising or profiling.</p>
@@ -61,34 +81,43 @@
   <li>The selected song's display name, available instrument list and a technical fingerprint used only to confirm that every player already has the same local song files.</li>
   <li>WebRTC connection data such as offers, answers and ICE candidates. This connection data may contain network information, including IP addresses, required to establish a peer-to-peer connection.</li>
 </ul>
-<p>Firebase Realtime Database is used only for room membership and WebRTC signalling. Once a connection is established, live match data travels directly between players through an encrypted WebRTC data channel in a host-authoritative star connection. Firebase does not receive imported song or audio files.</p>
+<p>Firebase Realtime Database is used only for room membership and WebRTC signalling. Once a connection is established, live match data travels directly between players through an encrypted WebRTC data channel in a host-authoritative star connection. Firebase does not receive imported song or audio files; song sharing, when you choose to use it, goes through the separate Cloudflare relay described above.</p>
 
-<h2>Who receives multiplayer data</h2>
+<h2>Video backgrounds</h2>
+<p>If a song you imported includes a video file, Riffline can play it as a background during that song. The video is read from your device's local app storage and decoded on your device. Riffline does not stream video from the internet and does not upload your video files, except as part of a song you explicitly choose to share with your own room.</p>
+
+<h2>Who receives your data</h2>
 <ul>
-  <li><strong>Other players in your room:</strong> your player name, chosen instrument, ready state, score, combo and current performance status.</li>
+  <li><strong>Other players in your room:</strong> your player name, chosen instrument, ready state, score, combo and current performance status — and, if you are the host and press the share button, the song files for that match.</li>
   <li><strong>Google Firebase:</strong> anonymous authentication and temporary room/signalling records, acting as our infrastructure service provider.</li>
-  <li><strong>STUN service:</strong> Google-operated STUN servers may process network address information to help establish a direct WebRTC connection. STUN does not receive your imported songs or live score data.</li>
+  <li><strong>Cloudflare:</strong> hosts the Worker and the private R2 bucket used for optional, host-initiated song transfers, acting as our infrastructure service provider.</li>
+  <li><strong>STUN service:</strong> Google-operated STUN servers may process network address information to help establish a direct WebRTC connection. STUN does not receive your songs or live score data.</li>
 </ul>
-<p>We do not sell multiplayer data, use it for advertising, or share it with data brokers.</p>
+<p>We do not sell your data, use it for advertising, or share it with data brokers.</p>
 
 <h2>Retention and deletion</h2>
-<p>Room records are intended to be temporary. A room is normally deleted from Firebase when its host leaves, and a guest's player record is normally deleted when that guest leaves. If the app or network closes unexpectedly, a temporary room record may remain until it is removed during database maintenance. Firebase may retain anonymous authentication records and limited service/security logs according to Google's own retention practices.</p>
-<p>You can stop future multiplayer processing by leaving the room or not using online multiplayer. To request deletion of multiplayer records associated with a room or to ask a privacy question, contact us at the address below and include the room code and approximate date/time where possible. Do not send song files, passwords or signing keys.</p>
+<p>Room records are intended to be temporary. A room is normally deleted from Firebase when its host leaves, and a guest's player record is normally deleted when that guest leaves. If the app or network closes unexpectedly, a temporary room record may remain until it is removed during database maintenance. Songs uploaded for a match expire 24 hours after upload and can be deleted sooner by the host. Firebase may retain anonymous authentication records and limited service/security logs according to Google's own retention practices; Cloudflare may keep limited operational logs according to its own practices.</p>
+<p>You can stop future multiplayer processing by leaving the room or not using online multiplayer. To request deletion of records associated with a room or to ask a privacy question, contact us at the address below and include the room code and approximate date/time where possible. Do not send song files, passwords or signing keys.</p>
 
 <h2>Permissions</h2>
-<p>Riffline requests Android's Internet permission for optional online multiplayer. It does not request location, contacts, camera, microphone, broad storage/media access, notification, or install-unknown-apps permissions. Local songs are selected through Android's system file picker.</p>
+<p>Riffline requests two Android permissions:</p>
+<ul>
+  <li><strong>Internet</strong> — for optional online multiplayer and for opening external links.</li>
+  <li><strong>Record audio (microphone)</strong> — only for Vocals mode pitch detection, as described above. It is requested when you first open that mode and can be declined; the rest of the app works without it.</li>
+</ul>
+<p>Riffline does not request location, contacts, camera, broad storage/media access, or install-unknown-apps permissions. Local songs are selected through Android's system file picker.</p>
 
 <h2>Security</h2>
-<p>Firebase traffic is sent over HTTPS, and direct multiplayer traffic uses an encrypted WebRTC data channel. Access to Firebase room data is restricted by authentication and database security rules. No internet transmission method can be guaranteed to be completely secure, but we limit multiplayer data to what is needed to provide the feature.</p>
+<p>Firebase and Cloudflare traffic is sent over HTTPS, and direct multiplayer traffic uses an encrypted WebRTC data channel. Access to Firebase room data is restricted by authentication and database security rules, and the song relay rejects any request without a valid token for that room. The R2 storage bucket is private and is not publicly listable. No internet transmission method can be guaranteed to be completely secure, but we limit the data we handle to what is needed to provide these features.</p>
 
 <h2>External links</h2>
-<p>The app may include optional links to third-party websites. These links open in your device's browser. Riffline does not send your multiplayer or song data to those websites. Your browser and the destination website handle any data under their own privacy policies.</p>
+<p>The app may include optional links to third-party websites, such as chart archives and our Discord server. These links open in your device's browser. Riffline does not send your multiplayer or song data to those websites. Your browser and the destination website handle any data under their own privacy policies.</p>
 
 <h2>Children's privacy</h2>
 <p>Riffline is not directed to children under 13, and we do not knowingly collect personal information from children. Online multiplayer does not require an email address or permanent Riffline account. If you believe a child has submitted personal information as a player name, contact us so that we can review and delete the relevant record where available.</p>
 
-<h2>Service provider</h2>
-<p>Online multiplayer uses Google Firebase. Information about Firebase privacy and security is available at <a href="https://firebase.google.com/support/privacy">firebase.google.com/support/privacy</a>.</p>
+<h2>Service providers</h2>
+<p>Online multiplayer uses Google Firebase and Cloudflare. Information about their privacy practices is available at <a href="https://firebase.google.com/support/privacy">firebase.google.com/support/privacy</a> and <a href="https://www.cloudflare.com/privacypolicy/">cloudflare.com/privacypolicy</a>.</p>
 
 <h2>Changes to this policy</h2>
 <p>If this policy changes, the updated version will be posted at this same URL with a new "Last updated" date.</p>
@@ -100,7 +129,9 @@
 
 <h2>Türkçe Özet</h2>
 <p class="lang-note">Riffline'ın tek oyunculu özellikleri çevrimdışı çalışır. İnternet izni yalnızca isteğe bağlı çevrimiçi multiplayer ve harici bağlantılar için kullanılır. Multiplayer sırasında Firebase tarafından rastgele bir anonim kullanıcı kimliği oluşturulur; seçtiğiniz oyuncu adı, oda kodu, enstrüman, zorluk, preset ve hazır durumu geçici oda/sinyalleşme verisi olarak işlenir. Aynı odadaki oyuncular oyuncu adınızı ve canlı skor, combo ve performans durumunuzu görür. WebRTC bağlantısı kurulurken IP adresi gibi ağ bilgileri işlenebilir.</p>
-<p class="lang-note">İçe aktardığınız chart, şarkı ve ses dosyaları Firebase'e yüklenmez ve diğer oyunculara gönderilmez. Tek oyunculu skorlar ile ayarlar yalnızca cihazınızda tutulur. Oda, sahibi normal şekilde ayrıldığında; misafir kaydı ise misafir ayrıldığında silinir. Beklenmeyen bağlantı kesintilerinde geçici kayıtlar bakım sırasında silinene kadar kalabilir. Riffline reklam, analitik veya çökme raporlama SDK'sı içermez ve multiplayer verilerini satmaz. Veri silme talebi veya sorularınız için: <a href="mailto:gurkangr696@gmail.com">gurkangr696@gmail.com</a>.</p>
+<p class="lang-note">Vokal modu, söylediğiniz notayı tespit etmek için mikrofonu kullanır. Ses yalnızca cihazınızda, anlık olarak işlenir ve hemen silinir; kaydedilmez, dosyaya yazılmaz ve hiçbir sunucuya ya da oyuncuya gönderilmez. Bu izin ilk kullanımda açıklamayla birlikte istenir ve reddedilebilir.</p>
+<p class="lang-note">İçe aktardığınız şarkı dosyaları cihazınızda kalır. Yalnızca oda sahibiyseniz ve odadaki eksik oyunculara şarkıyı göndermek için ilgili düğmeye basarsanız, seçili şarkının dosyaları (chart, bilgi ve ses) bize ait özel bir Cloudflare R2 alanına yüklenir ve yalnızca o odadaki oyuncular tarafından indirilir. Bu aktarım kendiliğinden başlamaz; her istek geçerli bir Firebase kimliği gerektirir, yüklenen şarkı 24 saat sonra otomatik silinir ve oda sahibi daha erken de silebilir.</p>
+<p class="lang-note">Tek oyunculu skorlar ile ayarlar yalnızca cihazınızda tutulur. Oda, sahibi normal şekilde ayrıldığında; misafir kaydı ise misafir ayrıldığında silinir. Beklenmeyen bağlantı kesintilerinde geçici kayıtlar bakım sırasında silinene kadar kalabilir. Riffline reklam, analitik veya çökme raporlama SDK'sı içermez ve verilerinizi satmaz. Veri silme talebi veya sorularınız için: <a href="mailto:gurkangr696@gmail.com">gurkangr696@gmail.com</a>.</p>
 
 </body>
 </html>
